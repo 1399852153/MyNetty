@@ -1,4 +1,4 @@
-package com.xyx.demo.bio;
+package com.my.netty.demo.bio;
 
 import java.io.BufferedReader;
 import java.io.IOException;
