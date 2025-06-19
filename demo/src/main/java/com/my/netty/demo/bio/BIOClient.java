@@ -21,10 +21,6 @@ public class BIOClient {
 
             String userInput;
             while ((userInput = stdIn.readLine()) != null) {
-                if ("exit".equalsIgnoreCase(userInput)) {
-                    break;
-                }
-
                 out.println(userInput);
                 System.out.println("Server response: " + in.readLine());
             }
