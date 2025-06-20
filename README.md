@@ -18,7 +18,7 @@
 #####
 每一部分都会有单独的分支和对应的博客（持续更新中）
 #####
-1. v1版本分支:  release/lab1_nio_reactor
-
+1. v1版本分支:  release/lab1_nio_reactor   
+   博客地址：[从零开始实现简易版Netty(一) MyNetty Reactor模式](https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)
 
 
