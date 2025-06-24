@@ -58,7 +58,7 @@ public class MyNioEventLoop implements Executor {
             // 如果执行execute方法的线程不是当前线程，可能当前eventLoop对应的thread还没有启动
             // 尝试启动当前eventLoop对应的线程(cas防并发，避免重复启动新线程)
             if(threadStartedFlag.compareAndSet(false,true)){
-                // 等价于netty的ThreadPerTaskExecutor,启动一个线程来执行事件循环
+                // 类似netty的ThreadPerTaskExecutor,启动一个线程来执行事件循环
                 new Thread(()->{
                     // 将eventLoop的thread与新启动的这个thread进行绑定
                     this.thread = Thread.currentThread();
@@ -98,12 +98,11 @@ public class MyNioEventLoop implements Executor {
         for(;;){
             try{
                 if(taskQueue.isEmpty()){
-//                    long timeout = 30;
-//                    int keys = unwrappedSelector.select(30 * 1000);
+                    long timeout = 30;
+                    int keys = unwrappedSelector.select(30 * 1000);
 
-                    int keys = unwrappedSelector.select();
                     if (keys == 0) {
-//                        logger.info("server {}s未监听到事件，继续监听！this={},this.selector={}",timeout,this,this.unwrappedSelector);
+                        logger.info("server {}s未监听到事件，继续监听！",timeout);
                         continue;
                     }
                 }else{
@@ -132,9 +131,8 @@ public class MyNioEventLoop implements Executor {
         Iterator<SelectionKey> selectionKeyItr = unwrappedSelector.selectedKeys().iterator();
         while (selectionKeyItr.hasNext()) {
             SelectionKey key = selectionKeyItr.next();
-//            logger.info("process SelectionKey={}",key.readyOps());
+            logger.info("process SelectionKey={}",key.readyOps());
             try {
-
                 // 拿出来后，要把集合中已经获取到的事件移除掉，避免重复的处理
                 selectionKeyItr.remove();
 
@@ -231,7 +229,7 @@ public class MyNioEventLoop implements Executor {
         ByteBuffer readBuffer = ByteBuffer.allocate(1024);
 
         int byteRead = socketChannel.read(readBuffer);
-//        logger.info("processReadEvent byteRead={}",byteRead);
+        logger.info("processReadEvent byteRead={}",byteRead);
         if(byteRead == -1){
             // 简单起见不考虑tcp半连接的情况，返回-1直接关掉连接
             socketChannel.close();
