@@ -2,7 +2,9 @@ package com.my.netty.core.reactor.handler.pinpline;
 
 
 import com.my.netty.core.reactor.channel.MyNioChannel;
+import com.my.netty.core.reactor.exception.MyNettyException;
 import com.my.netty.core.reactor.handler.MyChannelEventHandler;
+import com.my.netty.core.reactor.handler.MyChannelEventHandlerAdapter;
 import com.my.netty.core.reactor.handler.MyChannelEventInvoker;
 import com.my.netty.core.reactor.handler.context.MyAbstractChannelHandlerContext;
 import com.my.netty.core.reactor.handler.context.MyChannelPipelineHeadContext;
@@ -65,6 +67,9 @@ public class MyChannelPipeline implements MyChannelEventInvoker {
     }
 
     public void addFirst(MyChannelEventHandler handler){
+        // 非sharable的handler是否重复加入校验
+        checkMultiplicity(handler);
+
         MyAbstractChannelHandlerContext newCtx = newContext(handler);
 
         MyAbstractChannelHandlerContext oldFirstCtx = head.getNext();
@@ -75,6 +80,9 @@ public class MyChannelPipeline implements MyChannelEventInvoker {
     }
 
     public void addLast(MyChannelEventHandler handler){
+        // 非sharable的handler是否重复加入校验
+        checkMultiplicity(handler);
+
         MyAbstractChannelHandlerContext newCtx = newContext(handler);
 
         // 加入链表尾部节点之前
@@ -83,6 +91,21 @@ public class MyChannelPipeline implements MyChannelEventInvoker {
         newCtx.setNext(tail);
         oldLastCtx.setNext(newCtx);
         tail.setPrev(newCtx);
+    }
+
+    private static void checkMultiplicity(MyChannelEventHandler handler) {
+        if (handler instanceof MyChannelEventHandlerAdapter) {
+            MyChannelEventHandlerAdapter h = (MyChannelEventHandlerAdapter) handler;
+
+            if (!h.isSharable() && h.added) {
+                // 一个handler实例不是sharable，但是被加入到了pipeline一次以上，有问题
+                throw new MyNettyException(
+                        h.getClass().getName() + " is not a @Sharable handler, so can't be added or removed multiple times.");
+            }
+
+            // 第一次被引入，当前handler实例标记为已加入
+            h.added = true;
+        }
     }
 
     public MyNioChannel getChannel() {

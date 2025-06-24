@@ -2,6 +2,7 @@ package com.my.netty.core.reactor.eventloop;
 
 import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.channel.MyNioSocketChannel;
+import com.my.netty.core.reactor.exception.MyNettyException;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,7 +46,7 @@ public class MyNioEventLoop implements Executor {
         try {
             this.unwrappedSelector = selectorProvider.openSelector();
         } catch (IOException e) {
-            throw new RuntimeException("open selector error!",e);
+            throw new MyNettyException("open selector error!",e);
         }
     }
 
@@ -98,11 +99,8 @@ public class MyNioEventLoop implements Executor {
         for(;;){
             try{
                 if(taskQueue.isEmpty()){
-                    long timeout = 30;
-                    int keys = unwrappedSelector.select(30 * 1000);
-
+                    int keys = unwrappedSelector.select();
                     if (keys == 0) {
-                        logger.info("server {}s未监听到事件，继续监听！",timeout);
                         continue;
                     }
                 }else{

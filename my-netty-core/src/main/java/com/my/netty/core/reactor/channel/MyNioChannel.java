@@ -1,6 +1,7 @@
 package com.my.netty.core.reactor.channel;
 
 import com.my.netty.core.reactor.eventloop.MyNioEventLoop;
+import com.my.netty.core.reactor.exception.MyNettyException;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
 import com.my.netty.core.reactor.util.AssertUtil;
@@ -46,7 +47,7 @@ public abstract class MyNioChannel {
                 logger.warn("Failed to close a partially initialized socket.", e2);
             }
 
-            throw new RuntimeException("Failed to enter non-blocking mode.", e);
+            throw new MyNettyException("Failed to enter non-blocking mode.", e);
         }
     }
 
