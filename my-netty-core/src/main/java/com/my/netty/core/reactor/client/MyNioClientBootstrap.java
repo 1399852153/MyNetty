@@ -1,8 +1,9 @@
 package com.my.netty.core.reactor.client;
 
+import com.my.netty.core.reactor.channel.MyNioSocketChannel;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoop;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoopGroup;
-import com.my.netty.core.reactor.handler.MyEventHandler;
+import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,27 +15,29 @@ import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 
-public class MyNettyNioClient {
+public class MyNioClientBootstrap {
 
-    private static final Logger logger = LoggerFactory.getLogger(MyNettyNioClient.class);
+    private static final Logger logger = LoggerFactory.getLogger(MyNioClientBootstrap.class);
 
     private final InetSocketAddress remoteAddress;
 
     private final MyNioEventLoopGroup eventLoopGroup;
 
-    private SocketChannel socketChannel;
+    private MyNioSocketChannel myNioSocketChannel;
 
-    public MyNettyNioClient(InetSocketAddress remoteAddress, MyEventHandler myEventHandler, int nThreads) {
+    private final MyChannelPipelineSupplier myChannelPipelineSupplier;
+
+    public MyNioClientBootstrap(InetSocketAddress remoteAddress, MyChannelPipelineSupplier myChannelPipelineSupplier) {
         this.remoteAddress = remoteAddress;
 
-        this.eventLoopGroup = new MyNioEventLoopGroup(myEventHandler,nThreads);
+        this.eventLoopGroup = new MyNioEventLoopGroup(myChannelPipelineSupplier, 1);
+
+        this.myChannelPipelineSupplier = myChannelPipelineSupplier;
     }
 
     public void start() throws IOException {
         SocketChannel socketChannel = SocketChannel.open();
         socketChannel.configureBlocking(false);
-
-        this.socketChannel = socketChannel;
 
         MyNioEventLoop myNioEventLoop = this.eventLoopGroup.next();
 
@@ -42,28 +45,41 @@ public class MyNettyNioClient {
             try {
                 Selector selector = myNioEventLoop.getUnwrappedSelector();
 
+                myNioSocketChannel = new MyNioSocketChannel(selector,socketChannel,myChannelPipelineSupplier);
+
+                myNioEventLoop.register(myNioSocketChannel);
+
                 // doConnect
                 // Returns: true if a connection was established,
                 //          false if this channel is in non-blocking mode and the connection operation is in progress;
                 if(!socketChannel.connect(remoteAddress)){
-                    SelectionKey selectionKey = socketChannel.register(selector, 0);
+                    // 简单起见也监听READ事件，相当于netty中开启了autoRead
                     int clientInterestOps = SelectionKey.OP_CONNECT | SelectionKey.OP_READ;
-                    selectionKey.interestOps(selectionKey.interestOps() | clientInterestOps);
-                }
 
-                // 监听connect事件
-                logger.info("MyNioClient do start! remoteAddress={}",remoteAddress);
+                    myNioSocketChannel.getSelectionKey().interestOps(clientInterestOps);
+
+                    // 监听connect事件
+                    logger.info("MyNioClient do start! remoteAddress={}",remoteAddress);
+                }else{
+                    logger.info("MyNioClient do start connect error! remoteAddress={}",remoteAddress);
+
+                    // connect操作直接失败，关闭连接
+                    socketChannel.close();
+                }
             } catch (IOException e) {
                 logger.error("MyNioClient do connect error!",e);
             }
         });
     }
 
-    public void sendMessage(String msg) throws IOException {
+    public void sendMessage(String msg) {
         // 发送消息
         ByteBuffer writeBuffer = ByteBuffer.allocate(512);
         writeBuffer.put(msg.getBytes(StandardCharsets.UTF_8));
-        writeBuffer.flip(); // 写完了，flip供后续去读取
-        socketChannel.write(writeBuffer);
+        writeBuffer.flip();
+        // 写完了，flip供后续去读取
+
+        myNioSocketChannel.getChannelPipeline().write(msg);
+
     }
 }
