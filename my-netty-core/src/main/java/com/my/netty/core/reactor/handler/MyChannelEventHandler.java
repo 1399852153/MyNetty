@@ -2,6 +2,9 @@ package com.my.netty.core.reactor.handler;
 
 import com.my.netty.core.reactor.handler.context.MyChannelHandlerContext;
 
+/**
+ * 事件处理器(相当于netty中ChannelInboundHandler和ChannelOutboundHandler合在一起)
+ * */
 public interface MyChannelEventHandler {
 
     // ========================= inbound入站事件 ==============================
