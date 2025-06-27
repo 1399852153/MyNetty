@@ -44,10 +44,24 @@ public interface MyChannelEventHandler {
 ```
 * 前面说到，netty将入站与出站事件用两个不同的ChannelEventHandler接口进行了抽象，而在MyNetty中因为最终要支持的IO事件没有netty那么多，所以出站、入站的处理接口进行了合并。  
   这样做虽然在架构上不如netty那样拆分开来的优雅，但相对来说理解起来会更加简单。  
-* 未来MyChannelEventHandler还会随着迭代支持更多的IO事件，但这会是个渐进的过程，lab2中只需要支持少数几个IO事件便能满足需求。
+* 未来MyChannelEventHandler还会随着迭代支持更多的IO事件，但这是个渐进的过程，目前lab2中只需要支持少数几个IO事件便能满足需求。
 
 ### 2.2 MyNetty的pipeline流水线与ChannelHandler上下文
 ##### MyNetty pipeline流水线实现
+```java
+public interface MyChannelEventInvoker {
+
+    // ========================= inbound入站事件 ==============================
+    void fireChannelRead(Object msg);
+
+    void fireExceptionCaught(Throwable cause);
+
+    // ========================= outbound出站事件 ==============================
+    void close();
+
+    void write(Object msg);
+}
+```
 ```java
 /**
  * pipeline首先自己也是一个handler
@@ -158,8 +172,13 @@ public class MyChannelPipeline implements MyChannelEventInvoker {
     }
 }
 ```
+* pipeline实现了ChannelEventInvoker接口，ChannelEventInvoker与ChannelEventHandler中对应IO事件的方法是一一对应的，唯一的区别在于其方法中缺失了(MyChannelHandlerContext ctx)参数。
+* 同时，pipeline流水线中定义了两个关键属性，head和tail，其都是AbstractChannelHandlerContext类型的，其内部工作原理我们在下一小节展开。  
+  pipeline提供了addFirst和addLast两个方法(netty中提供了非常多功能类似的方法，MyNetty简单起见只实现了最常用的两个)，允许将用户自定义的ChannelHandler挂载在pipeline中，与head、tail组成一个双向链表，而入站出站事件会按照双向链表中节点的顺序进行传播。  
+* 对于入站事件(比如fireChannelRead)，事件从head节点开始，从前到后的在handler链表中传播；而出站事件(比如write), 事件则从tail节点开始，从后往前的在handler链表中传播。
 
 ### 2.3 MyNetty ChannelHandlerContext上下文实现
+下面我们来深入讲解ChannelHandlerContext上下文原理，看看一个具体的事件在pipeline的双向链表中的传播是如何实现的。
 ```java
 public interface MyChannelHandlerContext extends MyChannelEventInvoker {
 
@@ -591,7 +610,15 @@ public abstract class MyAbstractChannelHandlerContext implements MyChannelHandle
     }
 }
 ```
-
+* AbstractChannelHandlerContext作为ChannelHandlerContext子类的基础骨架，是理解Netty中IO事件传播机制的重中之重。  
+  AbstractChannelHandlerContext做为ChannelPipeline的实际节点，其拥有了prev和next两个属性，用于关联链表中的前驱和后继。
+* 在触发IO事件时，AbstractChannelHandlerContext会按照一定的规则(具体原理在下一节展开)找到下一个需要处理当前类型IO事件的事件处理器(findContextInbound、findContextInbound)。  
+* 在找到后会先判断当前线程与目标MyAbstractChannelHandlerContext的执行器线程是否相同(inEventLoop)，如果是则直接触发对应handler的回调方法；如果不是则将当前事件包装成一个任务交给next节点的executor执行。  
+  这样设计的主要原因是netty作为一个高性能网络框架，是非常忌讳使用同步锁的。EventLoop线程是按照引入taskQueue队列多写单读的方式消费IO事件以及相关任务的，这样可以避免处理IO事件时防止不同线程间并发而大量加锁。  
+* 举个例子，一个聊天服务器，用户a通过连接A发送了一条消息给服务端，而服务端需要通过连接b将消息同步给用户b，连接a和连接b属于不同的EventLoop线程。  
+  连接a所在的EventLoop在接受到读事件后，需要往连接b写出数据，此时不能直接由连接a的线程执行channel的写出操作(inEventLoop为false)，而必须通过execute方法写入taskQueue交给管理连接b的EventLoop线程，让它异步的处理。  
+  试想如果能允许别的EventLoop线程来回调触发不属于它的channel的IO事件，那么所有的ChannelHandler都必须考虑多线程并发的问题，而导致性能大幅降低。
+  
 ### 2.4 ChannelHandler mask掩码过滤机制
 ```java
 
