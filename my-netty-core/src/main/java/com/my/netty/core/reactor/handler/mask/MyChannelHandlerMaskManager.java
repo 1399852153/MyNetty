@@ -85,7 +85,7 @@ public class MyChannelHandlerMaskManager {
         try {
             Method method = handlerType.getMethod(methodName, paramTypes);
 
-            // 如果有skip注解，说明
+            // 如果有skip注解，说明需要跳过
             return method.isAnnotationPresent(Skip.class);
         } catch (NoSuchMethodException e) {
             // 没有这个方法，就不需要设置掩码

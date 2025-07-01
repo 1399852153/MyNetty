@@ -620,13 +620,100 @@ public abstract class MyAbstractChannelHandlerContext implements MyChannelHandle
   试想如果能允许别的EventLoop线程来回调触发不属于它的channel的IO事件，那么所有的ChannelHandler都必须考虑多线程并发的问题而被迫引入同步机制，导致性能大幅降低。
   
 ### 2.4 ChannelHandler mask掩码过滤机制
-在2.3的AbstractChannelHandlerContext实现中，可以发现事件传播的过程中关键的两个方法(findContextInbound/findContextOutbound)都是基于needSkipContext来实现的。  
-我们知道，用户自定义的一系列IO事件处理器一般都是各司其职的，不会对每一种IO事件都感兴趣。比如最经典的编解码handler，一般来说encode编码处理器只关心写出到远端的出站事件，而decode解码处理器只关心读取数据的入站事件。  
-但编码、解码处理器都是位于同一个链表中的，IO事件理论上会在链表中的所有处理器中传播。
+通常情况，用户自定义的IO事件处理器一般都是各司其职的，不会对每一种IO事件都感兴趣。比如最经典的编解码handler，一般来说encode编码处理器只关心写出到远端的出站事件，而decode解码处理器只关心读取到数据的入站事件。  
+但编码、解码处理器都是位于pipeline的同一个链表中的，因此IO事件理论上会在链表中的所有处理器中传播。同时由于netty允许ChannelHandler在内部自行决定是否将事件往下一个handler节点传播，因此如果不引入特别的机制，则意味着用户自定义的每一个ChannelHandler都必须实现所有的接口方法，并在内部添加模版代码来确保事件能够继续在pipeline中传播(比如都必须实现fireChannelRead方法，并且都调用ctx.fireChannelRead方法让事件能向后传播)。  
+netty中为ChannelHandler定义了非常多的IO事件接口，如果每个ChannelHandler都必须实现所有的IO事件接口，netty的用户在实现自定义处理器时会非常痛苦，同时在高并发下无谓的方法调用也会对性能有所影响。  
+因此netty提供了Skip机制，允许用户在编写自定义处理器时仅关心自己感兴趣的IO事件，而其它事件在进行传播时能自动的跳过当前handler节点在pipeline中继续传播。
+#####
+在2.3的AbstractChannelHandlerContext实现中，可以发现事件传播的过程中关键的两个方法(findContextInbound/findContextOutbound)都是基于needSkipContext方法来实现的。
+needSkipContext中基于AbstractChannelHandlerContext中的一个属性executionMask来决定是否需要跳过某个ChannelHandler。  
+下面我们结合MyNetty的源码来看看这个executionMask属性是如何得到，又是如何基于该掩码进行handler过滤的。 
+##### 
 ```java
+/**
+ * 计算并缓存每一个类型的handler所需要处理方法掩码的管理器
+ *
+ * 参考自netty的ChannelHandlerMask类
+ * */
+public class MyChannelHandlerMaskManager {
 
+    private static final Logger logger = LoggerFactory.getLogger(MyChannelHandlerMaskManager.class);
+
+    public static final int MASK_EXCEPTION_CAUGHT = 1;
+
+    // ==================== inbound ==========================
+    public static final int MASK_CHANNEL_REGISTERED = 1 << 1;
+    public static final int MASK_CHANNEL_UNREGISTERED = 1 << 2;
+    public static final int MASK_CHANNEL_ACTIVE = 1 << 3;
+    public static final int MASK_CHANNEL_INACTIVE = 1 << 4;
+    public static final int MASK_CHANNEL_READ = 1 << 5;
+    public static final int MASK_CHANNEL_READ_COMPLETE = 1 << 6;
+//    static final int MASK_USER_EVENT_TRIGGERED = 1 << 7;
+//    static final int MASK_CHANNEL_WRITABILITY_CHANGED = 1 << 8;
+
+    // ===================== outbound =========================
+    public static final int MASK_BIND = 1 << 9;
+    public static final int MASK_CONNECT = 1 << 10;
+//    static final int MASK_DISCONNECT = 1 << 11;
+    public static final int MASK_CLOSE = 1 << 12;
+//    static final int MASK_DEREGISTER = 1 << 13;
+    public static final int MASK_READ = 1 << 14;
+    public static final int MASK_WRITE = 1 << 15;
+    public static final int MASK_FLUSH = 1 << 16;
+
+    private static final ThreadLocal<Map<Class<? extends MyChannelEventHandler>, Integer>> MASKS =
+        ThreadLocal.withInitial(() -> new WeakHashMap<>(32));
+
+    public static int mask(Class<? extends MyChannelEventHandler> clazz) {
+        // 对于非共享的handler，会随着channel的创建而被大量创建
+        // 为了避免反复的计算同样类型handler的mask掩码而引入缓存，优先从缓存中获得对应处理器类的掩码
+        Map<Class<? extends MyChannelEventHandler>, Integer> cache = MASKS.get();
+        Integer mask = cache.get(clazz);
+        if (mask == null) {
+            // 缓存中不存在，计算出对应类型的掩码值
+            mask = calculateChannelHandlerMask(clazz);
+            cache.put(clazz, mask);
+        }
+        return mask;
+    }
+
+    private static int calculateChannelHandlerMask(Class<? extends MyChannelEventHandler> handlerType) {
+        int mask = 0;
+
+        // MyChannelEventHandler中的方法一一对应，如果支持就通过掩码的或运算将对应的bit位设置为1
+
+        if(!needSkip(handlerType,"channelRead", MyChannelHandlerContext.class,Object.class)){
+            mask |= MASK_CHANNEL_READ;
+        }
+
+        if(!needSkip(handlerType,"exceptionCaught", MyChannelHandlerContext.class,Throwable.class)){
+            mask |= MASK_EXCEPTION_CAUGHT;
+        }
+
+        if(!needSkip(handlerType,"close", MyChannelHandlerContext.class)){
+            mask |= MASK_CLOSE;
+        }
+
+        if(!needSkip(handlerType,"write", MyChannelHandlerContext.class,Object.class)){
+            mask |= MASK_WRITE;
+        }
+
+        return mask;
+    }
+
+    private static boolean needSkip(Class<?> handlerType, String methodName, Class<?>... paramTypes) {
+        try {
+            Method method = handlerType.getMethod(methodName, paramTypes);
+
+            // 如果有skip注解，说明需要跳过
+            return method.isAnnotationPresent(Skip.class);
+        } catch (NoSuchMethodException e) {
+            // 没有这个方法，就不需要设置掩码
+            return false;
+        }
+    }
+}
 ```
-
 ```java
 /**
  * 用于简化用户自定义的handler的适配器
@@ -682,7 +769,18 @@ public class MyChannelEventHandlerAdapter implements MyChannelEventHandler{
     }
 }
 ```
-### 2.5 MyNettyBootstrap与新版本Echo服务器demo实现
+#####
+* 在ChannelHandler被加入到pipeline时，会被包装成AbstractChannelHandlerContext节点加入链表。在AbstractChannelHandlerContext的构造方法中，计算出对应ChannelHandler的掩码。
+* ChannelHandler中的每个IO事件的方法都对应mask掩码的一个bit位，bit位为1则代表对该IO事件感兴趣，为0则代表不感兴趣需要跳过。在IO事件传播时，通过对应掩码进行与操作快速的判断是否需要跳过该节点。
+* 具体每一位的掩码值是通过方法上是否含有@Skip注解来判断的，带上了该注解就表示对当前IO事件不感兴趣，传播时需要跳过该ChannelHandler。
+* 掩码的计算引入了map缓存，相同类型的ChannelHandler实例的掩码不需要重复计算，在创建大量连接时，其对应pipeline中的AbstractChannelHandlerContext实例在被创建时，缓存能很好的提高性能。
+* Netty为入站，出站的ChannelHandler分别提供了ChannelInboundHandlerAdapter和ChannelOutboundHandlerAdapter两个适配器，其方法中默认都带上了@Skip注解。  
+  在实际开发时，用户可以选择令自己的自定义ChannelHandler继承对应的Adapter，重写感兴趣的IO事件的方法。重写后的方法不会带@Skip注解，会在IO事件传播时触发自定义的方法逻辑。
+
+### 2.5 @Sharable原理简单介绍
+初次之外，netty还提供了@Shareble注解，用来避免用户在
+
+## 3.MyNettyBootstrap与新版本Echo服务器demo实现
 
 ## 总结
 
