@@ -777,8 +777,13 @@ public class MyChannelEventHandlerAdapter implements MyChannelEventHandler{
 * Netty为入站，出站的ChannelHandler分别提供了ChannelInboundHandlerAdapter和ChannelOutboundHandlerAdapter两个适配器，其方法中默认都带上了@Skip注解。  
   在实际开发时，用户可以选择令自己的自定义ChannelHandler继承对应的Adapter，重写感兴趣的IO事件的方法。重写后的方法不会带@Skip注解，会在IO事件传播时触发自定义的方法逻辑。
 
-### 2.5 @Sharable原理简单介绍
-初次之外，netty还提供了@Shareble注解，用来避免用户在
+### 2.5 @Sharable防共享检测原理简单介绍
+netty还提供了防共享检测机制，用来避免用户错误的使用共享ChannelHandler。  
+* 正常情况下，每个ChannelPipeline中对应的ChannelEventHandler实例都是互相独立的，但在一些场景下使用共享的ChannelHandler能带来更好的性能。对于一些无状态的，或者架构上就是全局唯一的handler(比如dubbo中维护业务线程池的Handler)，令其在不同的Channel中共享是一个好的选择。  
+* netty会在ChannelHandler加入到pipeline时对其进行检查，如果存在一个ChannelHandler实例被不止一次的注册到netty中，netty会认为其被错误的注册。因为默认情况下，一个ChannelHandler实例不能同时被注册到一个以上的channel中，否则其将出现并发问题，netty会抛出异常来警告用户。  
+  而只有当用户在对应的ChannelHandler上标记上@Sharable注解，明确了其就是可以共享，已经考虑过并发的可能性时，才能在重复注册时通过校验。
+* 从个人的经历来说，我在刚使用netty时对@Sharable注解的功能有过误解。第一感觉时，在构造流水线时，被打上了@Sharable注解的Handler会类似spring的单例模式一样，即使重复注册也会被netty自动的弄成全局唯一。  
+  但实际上是反过来的，@Sharable只是一个检查的作用，避免用户错误的重复注册并发不安全的ChannelHandler。
 
 ## 3.MyNettyBootstrap与新版本Echo服务器demo实现
 
