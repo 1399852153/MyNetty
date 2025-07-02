@@ -240,7 +240,7 @@ public class MyNioEventLoop implements Executor {
             readBuffer.get(bytes);
 
             if(myNioChannel != null) {
-                // 触发pipeline的读取操作
+                // 触发pipeline的读事件
                 myNioChannel.getChannelPipeline().fireChannelRead(bytes);
             }else{
                 logger.error("processReadEvent attachment myNioChannel is null!");

@@ -57,7 +57,7 @@ public class MyChannelPipeline implements MyChannelEventInvoker {
 
     @Override
     public void close() {
-        // 出站时间，从尾节点向头结点传播
+        // 出站事件，从尾节点向头结点传播
         tail.close();
     }
 
@@ -67,7 +67,7 @@ public class MyChannelPipeline implements MyChannelEventInvoker {
     }
 
     public void addFirst(MyChannelEventHandler handler){
-        // 非sharable的handler是否重复加入校验
+        // 非sharable的handler是否重复加入的校验
         checkMultiplicity(handler);
 
         MyAbstractChannelHandlerContext newCtx = newContext(handler);
@@ -80,7 +80,7 @@ public class MyChannelPipeline implements MyChannelEventInvoker {
     }
 
     public void addLast(MyChannelEventHandler handler){
-        // 非sharable的handler是否重复加入校验
+        // 非sharable的handler是否重复加入的校验
         checkMultiplicity(handler);
 
         MyAbstractChannelHandlerContext newCtx = newContext(handler);
