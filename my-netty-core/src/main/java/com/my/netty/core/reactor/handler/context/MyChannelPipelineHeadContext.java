@@ -28,7 +28,7 @@ public class MyChannelPipelineHeadContext extends MyAbstractChannelHandlerContex
 
     @Override
     public void close(MyChannelHandlerContext ctx) throws Exception {
-        // 调用jdk原生的channel，关闭掉连接
+        // 调用jdk原生的channel方法，关闭掉连接
         ctx.getPipeline().getChannel().getJavaChannel().close();
     }
 

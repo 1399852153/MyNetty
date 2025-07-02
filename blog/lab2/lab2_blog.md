@@ -179,6 +179,7 @@ public class MyChannelPipeline implements MyChannelEventInvoker {
 
 ### 2.3 MyNetty ChannelHandlerContext上下文实现
 下面我们来深入讲解ChannelHandlerContext上下文原理，看看一个具体的事件在pipeline的双向链表中的传播是如何实现的。
+##### MyChannelHandlerContext上下文接口定义
 ```java
 public interface MyChannelHandlerContext extends MyChannelEventInvoker {
 
@@ -191,6 +192,7 @@ public interface MyChannelHandlerContext extends MyChannelEventInvoker {
     MyNioEventLoop executor();
 }
 ```
+##### MyAbstractChannelHandlerContext上下文骨架类
 ```java
 public abstract class MyAbstractChannelHandlerContext implements MyChannelHandlerContext{
 
@@ -378,6 +380,7 @@ public abstract class MyAbstractChannelHandlerContext implements MyChannelHandle
     }
 }
 ```
+##### MyChannelPipelineHeadContext pipeline哨兵头结点
 ```java
 /**
  * pipeline的head哨兵节点
@@ -400,7 +403,7 @@ public class MyChannelPipelineHeadContext extends MyAbstractChannelHandlerContex
 
     @Override
     public void close(MyChannelHandlerContext ctx) throws Exception {
-        // 调用jdk原生的channel，关闭掉连接
+        // 调用jdk原生的channel方法，关闭掉连接
         ctx.getPipeline().getChannel().getJavaChannel().close();
     }
 
@@ -422,191 +425,63 @@ public class MyChannelPipelineHeadContext extends MyAbstractChannelHandlerContex
         return this;
     }
 }
-```
+``` 
+##### MyChannelPipelineHeadContext pipeline哨兵尾结点
 ```java
-public abstract class MyAbstractChannelHandlerContext implements MyChannelHandlerContext{
+/**
+ * pipeline的tail哨兵节点
+ * */
+public class MyChannelPipelineTailContext extends MyAbstractChannelHandlerContext implements MyChannelEventHandler {
 
-    private static final Logger logger = LoggerFactory.getLogger(MyAbstractChannelHandlerContext.class);
+    private static final Logger logger = LoggerFactory.getLogger(MyChannelPipelineTailContext.class);
 
-    private final MyChannelPipeline pipeline;
-
-    private final int executionMask;
-
-    /**
-     * 双向链表前驱/后继节点
-     * */
-    private MyAbstractChannelHandlerContext prev;
-    private MyAbstractChannelHandlerContext next;
-
-    public MyAbstractChannelHandlerContext(MyChannelPipeline pipeline, Class<? extends MyChannelEventHandler> handlerClass) {
-        this.pipeline = pipeline;
-
-        this.executionMask = MyChannelHandlerMaskManager.mask(handlerClass);
+    public MyChannelPipelineTailContext(MyChannelPipeline pipeline) {
+        super(pipeline, MyChannelPipelineTailContext.class);
     }
 
     @Override
-    public MyNioChannel channel() {
-        return pipeline.getChannel();
-    }
-
-    public MyAbstractChannelHandlerContext getPrev() {
-        return prev;
-    }
-
-    public void setPrev(MyAbstractChannelHandlerContext prev) {
-        this.prev = prev;
-    }
-
-    public MyAbstractChannelHandlerContext getNext() {
-        return next;
-    }
-
-    public void setNext(MyAbstractChannelHandlerContext next) {
-        this.next = next;
+    public void channelRead(MyChannelHandlerContext ctx, Object msg) {
+        // 如果channelRead事件传播到了tail节点，说明用户自定义的handler没有处理好，但问题不大，打日志警告下
+        onUnhandledInboundMessage(ctx,msg);
     }
 
     @Override
-    public MyNioEventLoop executor() {
-        return this.pipeline.getChannel().getMyNioEventLoop();
+    public void exceptionCaught(MyChannelHandlerContext ctx, Throwable cause) {
+        // 如果exceptionCaught事件传播到了tail节点，说明用户自定义的handler没有处理好，但问题不大，打日志警告下
+        onUnhandledInboundException(cause);
     }
 
     @Override
-    public void fireChannelRead(Object msg) {
-        // 找到当前链条下最近的一个支持channelRead方法的MyAbstractChannelHandlerContext（inbound事件，从前往后找）
-        MyAbstractChannelHandlerContext nextHandlerContext = findContextInbound(MyChannelHandlerMaskManager.MASK_CHANNEL_READ);
-
-        // 调用找到的那个ChannelHandlerContext其handler的channelRead方法
-        MyNioEventLoop myNioEventLoop = nextHandlerContext.executor();
-        if(myNioEventLoop.inEventLoop()){
-            invokeChannelRead(nextHandlerContext,msg);
-        }else{
-            // 防并发，每个针对channel的操作都由自己的eventLoop线程去执行
-            myNioEventLoop.execute(()->{
-                invokeChannelRead(nextHandlerContext,msg);
-            });
-        }
+    public void close(MyChannelHandlerContext ctx) throws Exception {
+        // do nothing
+        logger.info("close op, tail context do nothing");
     }
 
     @Override
-    public void fireExceptionCaught(Throwable cause) {
-        // 找到当前链条下最近的一个支持exceptionCaught方法的MyAbstractChannelHandlerContext（inbound事件，从前往后找）
-        MyAbstractChannelHandlerContext nextHandlerContext = findContextInbound(MyChannelHandlerMaskManager.MASK_EXCEPTION_CAUGHT);
-
-        // 调用找到的那个ChannelHandlerContext其handler的exceptionCaught方法
-
-        MyNioEventLoop myNioEventLoop = nextHandlerContext.executor();
-        if(myNioEventLoop.inEventLoop()){
-            invokeExceptionCaught(nextHandlerContext,cause);
-        }else{
-            // 防并发，每个针对channel的操作都由自己的eventLoop线程去执行
-            myNioEventLoop.execute(()->{
-                invokeExceptionCaught(nextHandlerContext,cause);
-            });
-        }
+    public void write(MyChannelHandlerContext ctx, Object msg) throws Exception {
+        // do nothing
+        logger.info("write op, tail context do nothing");
     }
 
     @Override
-    public void close() {
-        // 找到当前链条下最近的一个支持close方法的MyAbstractChannelHandlerContext（outbound事件，从后往前找）
-        MyAbstractChannelHandlerContext nextHandlerContext = findContextOutbound(MyChannelHandlerMaskManager.MASK_CLOSE);
-
-        MyNioEventLoop myNioEventLoop = nextHandlerContext.executor();
-        if(myNioEventLoop.inEventLoop()){
-            doClose(nextHandlerContext);
-        }else{
-            // 防并发，每个针对channel的操作都由自己的eventLoop线程去执行
-            myNioEventLoop.execute(()->{
-                doClose(nextHandlerContext);
-            });
-        }
+    public MyChannelEventHandler handler() {
+        return this;
     }
 
-    private void doClose(MyAbstractChannelHandlerContext nextHandlerContext){
-        try {
-            nextHandlerContext.handler().close(nextHandlerContext);
-        } catch (Throwable t) {
-            logger.error("{} do close error!",nextHandlerContext,t);
-        }
+    private void onUnhandledInboundException(Throwable cause) {
+        logger.warn(
+            "An exceptionCaught() event was fired, and it reached at the tail of the pipeline. " +
+                "It usually means the last handler in the pipeline did not handle the exception.",
+            cause);
     }
 
-    @Override
-    public void write(Object msg) {
-        // 找到当前链条下最近的一个支持write方法的MyAbstractChannelHandlerContext（outbound事件，从后往前找）
-        MyAbstractChannelHandlerContext nextHandlerContext = findContextOutbound(MyChannelHandlerMaskManager.MASK_WRITE);
+    private void onUnhandledInboundMessage(MyChannelHandlerContext ctx, Object msg) {
+        logger.debug(
+            "Discarded inbound message {} that reached at the tail of the pipeline. " +
+                "Please check your pipeline configuration.", msg);
 
-        MyNioEventLoop myNioEventLoop = nextHandlerContext.executor();
-        if(myNioEventLoop.inEventLoop()){
-            doWrite(nextHandlerContext,msg);
-        }else{
-            // 防并发，每个针对channel的操作都由自己的eventLoop线程去执行
-            myNioEventLoop.execute(()->{
-                doWrite(nextHandlerContext,msg);
-            });
-        }
-    }
-
-    private void doWrite(MyAbstractChannelHandlerContext nextHandlerContext, Object msg) {
-        try {
-            nextHandlerContext.handler().write(nextHandlerContext,msg);
-        } catch (Throwable t) {
-            logger.error("{} do write error!",nextHandlerContext,t);
-        }
-    }
-
-    @Override
-    public MyChannelPipeline getPipeline() {
-        return pipeline;
-    }
-
-    public static void invokeChannelRead(MyAbstractChannelHandlerContext next, Object msg) {
-        try {
-            next.handler().channelRead(next, msg);
-        }catch (Throwable t){
-            // 处理抛出的异常
-            next.invokeExceptionCaught(t);
-        }
-    }
-
-    public static void invokeExceptionCaught(MyAbstractChannelHandlerContext next, Throwable cause) {
-        next.invokeExceptionCaught(cause);
-    }
-
-    private void invokeExceptionCaught(final Throwable cause) {
-        try {
-            this.handler().exceptionCaught(this, cause);
-        } catch (Throwable error) {
-            // 如果捕获异常的handler依然抛出了异常，则打印debug日志
-            logger.error(
-                "An exception {}" +
-                    "was thrown by a user handler's exceptionCaught() " +
-                    "method while handling the following exception:",
-                ThrowableUtil.stackTraceToString(error), cause);
-        }
-    }
-
-    private MyAbstractChannelHandlerContext findContextInbound(int mask) {
-        MyAbstractChannelHandlerContext ctx = this;
-        do {
-            // inbound事件，从前往后找
-            ctx = ctx.next;
-        } while (needSkipContext(ctx, mask));
-
-        return ctx;
-    }
-
-    private MyAbstractChannelHandlerContext findContextOutbound(int mask) {
-        MyAbstractChannelHandlerContext ctx = this;
-        do {
-            // outbound事件，从后往前找
-            ctx = ctx.prev;
-        } while (needSkipContext(ctx, mask));
-
-        return ctx;
-    }
-
-    private static boolean needSkipContext(MyAbstractChannelHandlerContext ctx, int mask) {
-        // 如果与运算后为0，说明不支持对应掩码的操作，需要跳过
-        return (ctx.executionMask & (mask)) == 0;
+        logger.debug("Discarded message pipeline : {}. Channel : {}.",
+            ctx.getPipeline(), ctx.channel());
     }
 }
 ```
@@ -782,12 +657,252 @@ netty还提供了防共享检测机制，用来避免用户错误的使用共享
 * 正常情况下，每个ChannelPipeline中对应的ChannelEventHandler实例都是互相独立的，但在一些场景下使用共享的ChannelHandler能带来更好的性能。对于一些无状态的，或者架构上就是全局唯一的handler(比如dubbo中维护业务线程池的Handler)，令其在不同的Channel中共享是一个好的选择。  
 * netty会在ChannelHandler加入到pipeline时对其进行检查，如果存在一个ChannelHandler实例被不止一次的注册到netty中，netty会认为其被错误的注册。因为默认情况下，一个ChannelHandler实例不能同时被注册到一个以上的channel中，否则其将出现并发问题，netty会抛出异常来警告用户。  
   而只有当用户在对应的ChannelHandler上标记上@Sharable注解，明确了其就是可以共享，已经考虑过并发的可能性时，才能在重复注册时通过校验。
-* 从个人的经历来说，我在刚使用netty时对@Sharable注解的功能有过误解。第一感觉时，在构造流水线时，被打上了@Sharable注解的Handler会类似spring的单例模式一样，即使重复注册也会被netty自动的弄成全局唯一。  
-  但实际上是反过来的，@Sharable只是一个检查的作用，避免用户错误的重复注册并发不安全的ChannelHandler。
+* 从个人的经历来说，我在初次使用netty时曾对@Sharable注解的功能有过误解。第一感觉是在构造流水线时，被打上了@Sharable注解的Handler会类似spring的单例模式一样，即使重复注册也会被netty自动的弄成全局唯一。  
+  但在了解了其工作原理后发现是反过来的，@Sharable更多的是起到一个检查的作用，避免用户错误的重复注册并发不安全的ChannelHandler。
+
+### 2.6 EventLoop改造接入pipeline流水线
+目前lab2版本的EventLoop还比较简单，只是在处理读事件的时候从原来的直接调用EventHandler的fireChannelRead方法，改造成了调用pipeline的fireChannelRead方法，令读事件在整个ChannelHandler流水线中传播。
+```java
+    private void processReadEvent(SelectionKey key) throws Exception {
+        SocketChannel socketChannel = (SocketChannel)key.channel();
+
+        // 目前所有的attachment都是MyNioChannel
+        MyNioSocketChannel myNioChannel = (MyNioSocketChannel) key.attachment();
+
+        // 简单起见，buffer不缓存，每次读事件来都新创建一个
+        // 暂时也不考虑黏包/拆包场景(Netty中靠ByteToMessageDecoder解决，后续再分析其原理)，理想的认为每个消息都小于1024，且每次读事件都只有一个消息
+        ByteBuffer readBuffer = ByteBuffer.allocate(1024);
+
+        int byteRead = socketChannel.read(readBuffer);
+        logger.info("processReadEvent byteRead={}",byteRead);
+        if(byteRead == -1){
+            // 简单起见不考虑tcp半连接的情况，返回-1直接关掉连接
+            socketChannel.close();
+        }else{
+            // 将缓冲区当前的limit设置为position=0，用于后续对缓冲区的读取操作
+            readBuffer.flip();
+            // 根据缓冲区可读字节数创建字节数组
+            byte[] bytes = new byte[readBuffer.remaining()];
+            // 将缓冲区可读字节数组复制到新建的数组中
+            readBuffer.get(bytes);
+
+            if(myNioChannel != null) {
+                // 触发pipeline的读取操作
+                myNioChannel.getChannelPipeline().fireChannelRead(bytes);
+            }else{
+                logger.error("processReadEvent attachment myNioChannel is null!");
+            }
+        }
+    }
+```
 
 ## 3.MyNettyBootstrap与新版本Echo服务器demo实现
+在实现了pipeline流水线功能后，配置自定义事件处理器的方式也要有所改变，参考netty也弄了个简单的Client/Server的Bootstrap，方便使用。
+##### 服务端Bootstrap
+```java
+public class MyNioServerBootstrap {
 
+    private static final Logger logger = LoggerFactory.getLogger(MyNioServerBootstrap.class);
+
+    private final InetSocketAddress endpointAddress;
+
+    private final MyNioEventLoopGroup bossGroup;
+
+    public MyNioServerBootstrap(InetSocketAddress endpointAddress,
+                                MyChannelPipelineSupplier childChannelPipelineSupplier,
+                                int bossThreads, int childThreads) {
+        this.endpointAddress = endpointAddress;
+
+        MyNioEventLoopGroup childGroup = new MyNioEventLoopGroup(childChannelPipelineSupplier,childThreads);
+        this.bossGroup = new MyNioEventLoopGroup(childChannelPipelineSupplier, bossThreads, childGroup);
+    }
+
+    public void start() throws IOException {
+        ServerSocketChannel serverSocketChannel = ServerSocketChannel.open();
+        serverSocketChannel.configureBlocking(false);
+
+        MyNioEventLoop myNioEventLoop = this.bossGroup.next();
+
+        myNioEventLoop.execute(()->{
+            try {
+                Selector selector = myNioEventLoop.getUnwrappedSelector();
+                serverSocketChannel.socket().bind(endpointAddress);
+                SelectionKey selectionKey = serverSocketChannel.register(selector, 0);
+                // 监听accept事件
+                selectionKey.interestOps(selectionKey.interestOps() | SelectionKey.OP_ACCEPT);
+                logger.info("MyNioServer do start! endpointAddress={}",endpointAddress);
+            } catch (IOException e) {
+                logger.error("MyNioServer do bind error!",e);
+            }
+        });
+    }
+}
+```
+##### 客户端Bootstrap
+```java
+public class MyNioClientBootstrap {
+
+    private static final Logger logger = LoggerFactory.getLogger(MyNioClientBootstrap.class);
+
+    private final InetSocketAddress remoteAddress;
+
+    private final MyNioEventLoopGroup eventLoopGroup;
+
+    private MyNioSocketChannel myNioSocketChannel;
+
+    private final MyChannelPipelineSupplier myChannelPipelineSupplier;
+
+    public MyNioClientBootstrap(InetSocketAddress remoteAddress, MyChannelPipelineSupplier myChannelPipelineSupplier) {
+        this.remoteAddress = remoteAddress;
+
+        this.eventLoopGroup = new MyNioEventLoopGroup(myChannelPipelineSupplier, 1);
+
+        this.myChannelPipelineSupplier = myChannelPipelineSupplier;
+    }
+
+    public void start() throws IOException {
+        SocketChannel socketChannel = SocketChannel.open();
+        socketChannel.configureBlocking(false);
+
+        MyNioEventLoop myNioEventLoop = this.eventLoopGroup.next();
+
+        myNioEventLoop.execute(()->{
+            try {
+                Selector selector = myNioEventLoop.getUnwrappedSelector();
+
+                myNioSocketChannel = new MyNioSocketChannel(selector,socketChannel,myChannelPipelineSupplier);
+
+                myNioEventLoop.register(myNioSocketChannel);
+
+                // doConnect
+                // Returns: true if a connection was established,
+                //          false if this channel is in non-blocking mode and the connection operation is in progress;
+                if(!socketChannel.connect(remoteAddress)){
+                    // 简单起见也监听READ事件，相当于netty中开启了autoRead
+                    int clientInterestOps = SelectionKey.OP_CONNECT | SelectionKey.OP_READ;
+
+                    myNioSocketChannel.getSelectionKey().interestOps(clientInterestOps);
+
+                    // 监听connect事件
+                    logger.info("MyNioClient do start! remoteAddress={}",remoteAddress);
+                }else{
+                    logger.info("MyNioClient do start connect error! remoteAddress={}",remoteAddress);
+
+                    // connect操作直接失败，关闭连接
+                    socketChannel.close();
+                }
+            } catch (IOException e) {
+                logger.error("MyNioClient do connect error!",e);
+            }
+        });
+    }
+}
+```
+##### 
+原来的Echo服务端/客户端demo也对逻辑进行了拆分，将业务逻辑和编解码逻辑拆分成了不同的ChannelHandler。  
+##### Echo服务器与客户端编解码处理器实现
+```java
+public class EchoMessageEncoder extends MyChannelEventHandlerAdapter {
+
+    private static final Logger logger = LoggerFactory.getLogger(EchoMessageEncoder.class);
+
+    @Override
+    public void write(MyChannelHandlerContext ctx, Object msg) throws Exception {
+        // 写事件从tail向head传播，msg一定是string类型
+        String message = (String) msg;
+
+        ByteBuffer writeBuffer = ByteBuffer.allocateDirect(1024);
+        writeBuffer.put(message.getBytes(StandardCharsets.UTF_8));
+        writeBuffer.flip();
+
+        logger.info("EchoMessageEncoder message to byteBuffer, " +
+            "message={}, writeBuffer={}",message,writeBuffer);
+
+        ctx.write(writeBuffer);
+    }
+}
+```
+```java
+public class EchoMessageDecoder extends MyChannelEventHandlerAdapter {
+
+    private static final Logger logger = LoggerFactory.getLogger(EchoMessageDecoder.class);
+
+    @Override
+    public void channelRead(MyChannelHandlerContext ctx, Object msg) throws Exception {
+        // 读事件从head向tail传播，msg一定是string类型
+        String receivedStr = new String((byte[]) msg, StandardCharsets.UTF_8);
+
+        logger.info("EchoMessageDecoder byteBuffer to message, " +
+            "msg={}, receivedStr={}",msg,receivedStr);
+
+        // 当前版本，不考虑黏包拆包等各种问题，decoder只负责将byte转为string
+        ctx.fireChannelRead(receivedStr);
+    }
+}
+```
+##### Echo服务器与客户端demo
+```java
+public class ServerDemo {
+
+    public static void main(String[] args) throws IOException {
+        MyNioServerBootstrap myNioServerBootstrap = new MyNioServerBootstrap(
+            new InetSocketAddress(8080),
+            // 先简单一点，只支持childEventGroup自定义配置pipeline
+            new MyChannelPipelineSupplier() {
+                @Override
+                public MyChannelPipeline buildMyChannelPipeline(MyNioChannel myNioChannel) {
+                    MyChannelPipeline myChannelPipeline = new MyChannelPipeline(myNioChannel);
+                    // 注册自定义的EchoServerEventHandler
+                    myChannelPipeline.addLast(new EchoMessageEncoder());
+                    myChannelPipeline.addLast(new EchoMessageDecoder());
+                    myChannelPipeline.addLast(new EchoServerEventHandler());
+                    return myChannelPipeline;
+                }
+            },1,5);
+        myNioServerBootstrap.start();
+
+        LockSupport.park();
+    }
+}
+```
+```java
+public class ClientDemo {
+
+    public static void main(String[] args) throws IOException {
+        MyNioClientBootstrap myNioClientBootstrap = new MyNioClientBootstrap(new InetSocketAddress(8080),new MyChannelPipelineSupplier() {
+            @Override
+            public MyChannelPipeline buildMyChannelPipeline(MyNioChannel myNioChannel) {
+                MyChannelPipeline myChannelPipeline = new MyChannelPipeline(myNioChannel);
+                // 注册自定义的EchoClientEventHandler
+                myChannelPipeline.addLast(new EchoMessageEncoder());
+                myChannelPipeline.addLast(new EchoMessageDecoder());
+                myChannelPipeline.addLast(new EchoClientEventHandler());
+                return myChannelPipeline;
+            }
+        });
+        myNioClientBootstrap.start();
+
+        System.out.println("please input message:");
+        while(true){
+            Scanner sc = new Scanner(System.in);
+            String msg = sc.next();
+            System.out.println("get input message:" + msg);
+
+            // 发送消息
+            myNioClientBootstrap.sendMessage(msg);
+        }
+    }
+}
+```
+ 
 ## 总结
+* 在lab2中，MyNetty实现了pipeline流水线机制，允许用户构造自定义处理器链条，进行功能的解耦。同时也提供了一个Bootstrap脚手架帮助用户更快捷的实现自己的网络应用程序。  
+  相信在了解了MyNetty的简易版本流水线实现后，能帮助读者更好的理解netty中更加复杂，完备的pipeline实现原理。  
+* 目前为止，受限于MyNetty提供的简陋功能，我们的Echo网络程序还非常原始，大量极端场景下的临界条件都没有处理。比如分配的ByteBuffer是固定大小，无法动态扩容，接受的消息体过大就会出错；发送和接受的消息也存在黏包、拆包的问题，  
+  但千里之行始于足下，在后续的lab中，MyNetty会逐步的完善上述提到的问题。
+* 在逐步完善各种功能的过程中，读者也将能够体会到Netty的强大之处。在普通使用者感受不到的地方，netty底层处理了大量的边界情况，这才使得普通开发者能够基于netty快速的构建起足够健壮的网络应用程序。
+#####
+博客中展示的完整代码在我的github上：https://github.com/1399852153/MyNetty (release/lab2_pipeline_handle 分支)，内容如有错误，还请多多指教。
 
 
 
