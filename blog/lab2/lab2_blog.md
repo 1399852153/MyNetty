@@ -1,29 +1,28 @@
 # 从零开始实现简易版Netty(二) MyNetty pipeline流水线
 
 ## 1. Netty pipeline流水线介绍
-在上一篇博客中v1版本的MyNetty参考netty实现了一个极其精简的reactor模型。按照计划，v2版本的MyNetty需要实现pipeline流水线，以支持不同模块处理逻辑的解耦。  
+在上一篇博客中lab1版本的MyNetty参考netty实现了一个极其精简的reactor模型。按照计划，lab2版本的MyNetty需要实现pipeline流水线，以支持不同模块处理逻辑的解耦。  
 #####
-由于本文属于系列博客，读者需要对之前的博客内容有所了解才能更好地理解本篇内容。  
-* v1版本博客：[从零开始实现简易版Netty(一) MyNetty Reactor模式](https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)  
+由于本文属于系列博客，读者需要对之前的博客内容有所了解才能更好地理解本文内容。  
+* lab1版本博客：[从零开始实现简易版Netty(一) MyNetty Reactor模式](https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)  
 
 #####
-在v1版本中，MyNetty的EventLoop处理逻辑中，允许使用者配置一个EventHandler，并在处理read事件时调用其实现的自定义fireChannelRead方法。  
-这一机制在实现demo中的简易echo服务器时是够用的，但在实际的场景中，一个完备的网络框架，业务想要处理的IO事件有很多类型，并且不希望在一个大而全的臃肿的处理器中处理所有的IO事件，而是能够模块化的拆分不同的处理逻辑，实现架构上的灵活解耦。  
+在lab1版本中，MyNetty的EventLoop处理逻辑中，允许使用者配置一个EventHandler，并在处理read事件时调用其实现的自定义fireChannelRead方法。  
+这一机制在实现demo中的简易echo服务器时是够用的，但在实际的场景中，一个完备的网络程序，业务想要处理的IO事件有很多类型，并且不希望在一个大而全的臃肿的处理器中处理所有的IO事件，而是能够模块化的拆分不同的处理逻辑，实现架构上的灵活解耦。  
 **因此netty提供了pipeline流水线机制，允许用户在使用netty时能按照自己的需求，按顺序组装自己的处理器链条。**
 
 ### 1.1 netty的IO事件
 在实际的网络环境中，有非常多不同类型的IO事件，最典型的就是读取来自远端的数据(read)以及向远端写出发送数据(write)。  
 netty对这些IO事件进行了抽象，并允许用户编写自定义的处理器监听或是主动触发这些事件。  
-netty按照事件数据流的传播方向将IO事件分成了入站(InBound)与出站(OutBound)两大类，由远端输入传播到本地应用程序的事件被叫做入站事件，从本地应用程序触发向远端传播的事件叫出站事件。主要的入站事件有channelRead、channelActive等，主要的出站事件有write、connect、bind等。
+netty按照事件数据流的传播方向将IO事件分成了入站(InBound)与出站(OutBound)两大类，由远端输入传播到本地应用程序的事件被叫做入站事件，从本地应用程序触发向远端传播的事件叫出站事件。  
+主要的入站事件有channelRead、channelActive等，主要的出站事件有write、connect、bind等。
 
 ### 1.2 netty的IO事件处理器与pipeline流水线
 针对InBound入站IO事件，netty抽象出了ChannelInboundHandler接口；针对OutBound出站IO事件，netty抽象出了ChannelOutboundHandler接口。  
-用户可以编写一系列继承自对应ChannelHandler接口的自定义处理器，将其绑定到ChannelPipeline中，ChannelPipeline实例是独属于某个特定channel连接的。
-todo 附图
-
+用户可以编写一系列继承自对应ChannelHandler接口的自定义处理器，将其绑定到ChannelPipeline中。每一个Channel都对应一个ChannelPipeline，ChannelPipeline实例是独属于某个特定channel连接的。
+![netty_pipeline.png](netty_pipeline.png)
 ## 2. MyNetty实现pipeline流水线
 经过上述对于netty的IO事件与pipeline流水线简要介绍后，读者对netty的流水线虽然有了一定的概念，但对具体的细节还是知之甚少。下面我们结合MyNetty的源码，展开介绍netty的流水线机制实现。
-
 ### 2.1 MyNetty的事件处理器
 ```java
 /**
@@ -64,7 +63,7 @@ public interface MyChannelEventInvoker {
 ```
 ```java
 /**
- * pipeline首先自己也是一个handler
+ * pipeline首先自己也是一个Invoker
  *
  * 包括head和tail两个哨兵节点
  * */
@@ -172,7 +171,8 @@ public class MyChannelPipeline implements MyChannelEventInvoker {
     }
 }
 ```
-* pipeline实现了ChannelEventInvoker接口，ChannelEventInvoker与ChannelEventHandler中对应IO事件的方法是一一对应的，唯一的区别在于其方法中缺失了(MyChannelHandlerContext ctx)参数。
+* pipeline实现了ChannelEventInvoker接口，ChannelEventInvoker与ChannelEventHandler中对应IO事件的方法是一一对应的，唯一的区别在于其方法中缺失了(MyChannelHandlerContext ctx)参数。  
+  Invoker接口用于netty内部触发流水线的事件传播，而Handler接口用于IO事件触发时回调事件处理器。
 * 同时，pipeline流水线中定义了两个关键属性，head和tail，其都是AbstractChannelHandlerContext类型的，其内部工作原理我们在下一小节展开。  
   pipeline提供了addFirst和addLast两个方法(netty中提供了非常多功能类似的方法，MyNetty简单起见只实现了最常用的两个)，允许将用户自定义的ChannelHandler挂载在pipeline中，与head、tail组成一个双向链表，而入站出站事件会按照双向链表中节点的顺序进行传播。  
 * 对于入站事件(比如fireChannelRead)，事件从head节点开始，从前到后的在流水线的handler链表中传播；而出站事件(比如write), 事件则从tail节点开始，从后往前的在流水线的handler链表中传播。
@@ -493,6 +493,8 @@ public class MyChannelPipelineTailContext extends MyAbstractChannelHandlerContex
 * 举个例子，一个聊天服务器，用户a通过连接A发送了一条消息给服务端，而服务端需要通过连接b将消息同步给用户b，连接a和连接b属于不同的EventLoop线程。  
   连接a所在的EventLoop在接受到读事件后，需要往连接b写出数据，此时不能直接由连接a的线程执行channel的写出操作(inEventLoop为false)，而必须通过execute方法写入taskQueue交给管理连接b的EventLoop线程，让它异步的处理。  
   试想如果能允许别的EventLoop线程来回调触发不属于它的channel的IO事件，那么所有的ChannelHandler都必须考虑多线程并发的问题而被迫引入同步机制，导致性能大幅降低。
+* netty中可以在ChannelHandler中主动的触发一些IO事件，比如write写出事件。如果是使用ChannelHandlerContext.write写出，则传播的起点是当前Handler节点；而如果是ChannelHandlerContext.channel.write的方式写出，其底层就是调用的是pipeline.write，其传播的起点则是tail哨兵节点。  
+  结合MyNetty中上述pipeline相关的代码，相信读者应该能更好的理解netty中的这一传播机制。
   
 ### 2.4 ChannelHandler mask掩码过滤机制
 通常情况，用户自定义的IO事件处理器一般都是各司其职的，不会对每一种IO事件都感兴趣。比如最经典的编解码handler，一般来说encode编码处理器只关心写出到远端的出站事件，而decode解码处理器只关心读取到数据的入站事件。  

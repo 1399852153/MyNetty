@@ -14,7 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * pipeline首先自己也是一个handler
+ * pipeline首先自己也是一个Invoker
  *
  * 包括head和tail两个哨兵节点
  * */
