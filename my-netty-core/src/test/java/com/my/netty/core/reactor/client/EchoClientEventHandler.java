@@ -1,23 +1,35 @@
 package com.my.netty.core.reactor.client;
 
-import com.my.netty.core.reactor.handler.MyEventHandler;
+import com.my.netty.core.reactor.handler.MyChannelEventHandlerAdapter;
+import com.my.netty.core.reactor.handler.context.MyChannelHandlerContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.channels.SelectableChannel;
 import java.nio.channels.SocketChannel;
-import java.nio.charset.StandardCharsets;
 
-public class EchoClientEventHandler implements MyEventHandler {
+public class EchoClientEventHandler extends MyChannelEventHandlerAdapter {
 
     private static final Logger logger = LoggerFactory.getLogger(EchoClientEventHandler.class);
 
     @Override
-    public void fireChannelRead(SelectableChannel selectableChannel, byte[] msg) {
-        SocketChannel socketChannel = (SocketChannel) selectableChannel;
+    public void channelRead(MyChannelHandlerContext ctx, Object msg) {
+        SocketChannel socketChannel = (SocketChannel) ctx.channel().getJavaChannel();
 
         // echo客户端接收到读事件后，只是简单的打印出来
-        String receivedStr = new String(msg, StandardCharsets.UTF_8);
-        logger.info("echo client received message:{} ,from={}",receivedStr,socketChannel.socket().getRemoteSocketAddress());
+        String receivedStr = (String) msg;
+        logger.info("echo client received message:{} , from={}",receivedStr,socketChannel.socket().getRemoteSocketAddress());
+    }
+
+    @Override
+    public void exceptionCaught(MyChannelHandlerContext ctx, Throwable cause) throws Exception {
+        cause.printStackTrace();
+        ctx.close();
+    }
+
+    @Override
+    public void close(MyChannelHandlerContext ctx) throws Exception {
+        logger.info("echo client close channel!");
+
+        ctx.close();
     }
 }

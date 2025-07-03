@@ -2,7 +2,7 @@ package com.my.netty.core.reactor.server;
 
 import com.my.netty.core.reactor.eventloop.MyNioEventLoop;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoopGroup;
-import com.my.netty.core.reactor.handler.MyEventHandler;
+import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,20 +12,21 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 
-public class MyNettyNioServer {
+public class MyNioServerBootstrap {
 
-    private static final Logger logger = LoggerFactory.getLogger(MyNettyNioServer.class);
+    private static final Logger logger = LoggerFactory.getLogger(MyNioServerBootstrap.class);
 
     private final InetSocketAddress endpointAddress;
 
     private final MyNioEventLoopGroup bossGroup;
 
-    public MyNettyNioServer(InetSocketAddress endpointAddress, MyEventHandler myEventHandler,
-                            int bossThreads, int childThreads) {
+    public MyNioServerBootstrap(InetSocketAddress endpointAddress,
+                                MyChannelPipelineSupplier childChannelPipelineSupplier,
+                                int bossThreads, int childThreads) {
         this.endpointAddress = endpointAddress;
 
-        MyNioEventLoopGroup childGroup = new MyNioEventLoopGroup(myEventHandler,childThreads);
-        this.bossGroup = new MyNioEventLoopGroup(myEventHandler,bossThreads,childGroup);
+        MyNioEventLoopGroup childGroup = new MyNioEventLoopGroup(childChannelPipelineSupplier,childThreads);
+        this.bossGroup = new MyNioEventLoopGroup(childChannelPipelineSupplier, bossThreads, childGroup);
     }
 
     public void start() throws IOException {

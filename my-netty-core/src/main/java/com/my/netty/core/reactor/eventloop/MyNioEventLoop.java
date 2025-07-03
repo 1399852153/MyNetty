@@ -1,15 +1,15 @@
 package com.my.netty.core.reactor.eventloop;
 
-import com.my.netty.core.reactor.handler.MyEventHandler;
+import com.my.netty.core.reactor.channel.MyNioChannel;
+import com.my.netty.core.reactor.channel.MyNioSocketChannel;
+import com.my.netty.core.reactor.exception.MyNettyException;
+import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
+import java.nio.channels.*;
 import java.nio.channels.spi.SelectorProvider;
 import java.util.Iterator;
 import java.util.Queue;
@@ -33,7 +33,7 @@ public class MyNioEventLoop implements Executor {
 
     private final AtomicBoolean threadStartedFlag = new AtomicBoolean(false);
 
-    private MyEventHandler myEventHandler;
+    private MyChannelPipelineSupplier channelPipelineSupplier;
 
     public MyNioEventLoop(){
         this(null);
@@ -46,18 +46,18 @@ public class MyNioEventLoop implements Executor {
         try {
             this.unwrappedSelector = selectorProvider.openSelector();
         } catch (IOException e) {
-            throw new RuntimeException("open selector error!",e);
+            throw new MyNettyException("open selector error!",e);
         }
     }
 
     @Override
     public void execute(Runnable task) {
-        // 将任务加入eventLoop所属的任务队列，事件循环中会
+        // 将任务加入eventLoop所属的任务队列，事件循环中线程的无限会把任务捞起来处理
         taskQueue.add(task);
 
         if(this.thread != Thread.currentThread()){
             // 如果执行execute方法的线程不是当前线程，可能当前eventLoop对应的thread还没有启动
-            // 尝试启动当前eventLoop对应的线程(cas防并发)
+            // 尝试启动当前eventLoop对应的线程(cas防并发，避免重复启动新线程)
             if(threadStartedFlag.compareAndSet(false,true)){
                 // 类似netty的ThreadPerTaskExecutor,启动一个线程来执行事件循环
                 new Thread(()->{
@@ -69,14 +69,29 @@ public class MyNioEventLoop implements Executor {
                 }).start();
             }
         }
+
+        boolean inEventLoop = inEventLoop();
+        if(!inEventLoop){
+            // 因为eventLoop中selector.select是阻塞等待的，如果是别的线程提交了任务
+            // 要尝试把当前eventLoop对应的线程唤醒，令其能去执行队列里的任务
+            this.unwrappedSelector.wakeup();
+        }
+    }
+
+    public boolean inEventLoop(){
+        return this.thread == Thread.currentThread();
     }
 
     public Selector getUnwrappedSelector() {
         return unwrappedSelector;
     }
 
-    public void setMyEventHandler(MyEventHandler myEventHandler) {
-        this.myEventHandler = myEventHandler;
+    public void setMyChannelPipelineSupplier(MyChannelPipelineSupplier channelPipelineSupplier) {
+        this.channelPipelineSupplier = channelPipelineSupplier;
+    }
+
+    public void register(MyNioChannel myNioChannel){
+        doRegister(this,myNioChannel);
     }
 
     private void doEventLoop(){
@@ -84,9 +99,8 @@ public class MyNioEventLoop implements Executor {
         for(;;){
             try{
                 if(taskQueue.isEmpty()){
-                    int keys = unwrappedSelector.select(60000);
+                    int keys = unwrappedSelector.select();
                     if (keys == 0) {
-                        logger.info("server 60s未监听到事件，继续监听！");
                         continue;
                     }
                 }else{
@@ -167,14 +181,20 @@ public class MyNioEventLoop implements Executor {
         ServerSocketChannel ssChannel = (ServerSocketChannel)key.channel();
 
         SocketChannel socketChannel = ssChannel.accept();
+        socketChannel.finishConnect();
+        logger.info("socketChannel={} finishConnect!",socketChannel);
+
+        MyNioSocketChannel myNioSocketChannel = new MyNioSocketChannel(this.unwrappedSelector,socketChannel,channelPipelineSupplier);
         if(this.childGroup != null){
             // boss/worker模式，boss线程只负责接受和建立连接
             // 将建立的连接交给child线程组去处理后续的读写
-            childGroup.next().execute(()->{
-                doRegister(socketChannel);
+            MyNioEventLoop childEventLoop = childGroup.next();
+            childEventLoop.execute(()->{
+                childEventLoop.register(myNioSocketChannel);
             });
         }else{
-            doRegister(socketChannel);
+            // 没有设置childGroup，就由bossGroup自己处理
+            doRegister(this,myNioSocketChannel);
         }
     }
 
@@ -199,11 +219,15 @@ public class MyNioEventLoop implements Executor {
     private void processReadEvent(SelectionKey key) throws Exception {
         SocketChannel socketChannel = (SocketChannel)key.channel();
 
+        // 目前所有的attachment都是MyNioChannel
+        MyNioSocketChannel myNioChannel = (MyNioSocketChannel) key.attachment();
+
         // 简单起见，buffer不缓存，每次读事件来都新创建一个
         // 暂时也不考虑黏包/拆包场景(Netty中靠ByteToMessageDecoder解决，后续再分析其原理)，理想的认为每个消息都小于1024，且每次读事件都只有一个消息
-        ByteBuffer readBuffer = ByteBuffer.allocate(64);
+        ByteBuffer readBuffer = ByteBuffer.allocate(1024);
 
         int byteRead = socketChannel.read(readBuffer);
+        logger.info("processReadEvent byteRead={}",byteRead);
         if(byteRead == -1){
             // 简单起见不考虑tcp半连接的情况，返回-1直接关掉连接
             socketChannel.close();
@@ -215,31 +239,32 @@ public class MyNioEventLoop implements Executor {
             // 将缓冲区可读字节数组复制到新建的数组中
             readBuffer.get(bytes);
 
-            if(myEventHandler != null) {
-                myEventHandler.fireChannelRead(socketChannel, bytes);
+            if(myNioChannel != null) {
+                // 触发pipeline的读事件
+                myNioChannel.getChannelPipeline().fireChannelRead(bytes);
+            }else{
+                logger.error("processReadEvent attachment myNioChannel is null!");
             }
         }
     }
 
-    private void doRegister(SocketChannel socketChannel){
+    private void doRegister(MyNioEventLoop myNioEventLoop, MyNioChannel myNioChannel){
         try {
-            // nio的非阻塞channel
-            socketChannel.configureBlocking(false);
-
-            socketChannel.finishConnect();
-
-            logger.info("socketChannel={} finishConnect!",socketChannel);
+            // 与当前eventLoop绑定
+            myNioChannel.setMyNioEventLoop(myNioEventLoop);
 
             // 将接受到的连接注册到selector中，并监听read事件
-            socketChannel.register(unwrappedSelector, SelectionKey.OP_READ);
+            // 并且将MyNioChannel这一channel的包装类作为附件与socketChannel进行绑定
+            SelectionKey selectionKey = myNioChannel.getJavaChannel().register(unwrappedSelector, SelectionKey.OP_READ, myNioChannel);
+            myNioChannel.setSelectionKey(selectionKey);
 
-            logger.info("socketChannel={} doRegister success!",socketChannel);
+            logger.info("socketChannel={} register success! eventLoop={}",myNioChannel,this);
         }catch (Exception e){
-            logger.error("register socketChannel={} error!",socketChannel,e);
+            logger.error("register socketChannel={} error!",myNioChannel,e);
             try {
-                socketChannel.close();
+                myNioChannel.getJavaChannel().close();
             } catch (IOException ex) {
-                logger.error("register channel close={} error!",socketChannel,ex);
+                logger.error("register channel close={} error!",myNioChannel,ex);
             }
         }
     }

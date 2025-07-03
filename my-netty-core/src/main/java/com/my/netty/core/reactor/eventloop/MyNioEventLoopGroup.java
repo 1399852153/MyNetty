@@ -1,6 +1,8 @@
 package com.my.netty.core.reactor.eventloop;
 
-import com.my.netty.core.reactor.handler.MyEventHandler;
+
+import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
+
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class MyNioEventLoopGroup {
@@ -11,11 +13,11 @@ public class MyNioEventLoopGroup {
 
     private final AtomicInteger atomicInteger = new AtomicInteger();
 
-    public MyNioEventLoopGroup(MyEventHandler myEventHandler, int nThreads) {
-        this(myEventHandler,nThreads,null);
+    public MyNioEventLoopGroup(MyChannelPipelineSupplier myChannelPipelineSupplier, int nThreads) {
+        this(myChannelPipelineSupplier,nThreads,null);
     }
 
-    public MyNioEventLoopGroup(MyEventHandler myEventHandler, int nThreads, MyNioEventLoopGroup childGroup) {
+    public MyNioEventLoopGroup(MyChannelPipelineSupplier myChannelPipelineSupplier, int nThreads, MyNioEventLoopGroup childGroup) {
         if(nThreads <= 0){
             throw new IllegalArgumentException("MyNioEventLoopGroup nThreads must > 0");
         }
@@ -26,7 +28,7 @@ public class MyNioEventLoopGroup {
         executors = new MyNioEventLoop[nThreads];
         for(int i=0; i<nThreads; i++){
             MyNioEventLoop myNioEventLoop = new MyNioEventLoop(childGroup);
-            myNioEventLoop.setMyEventHandler(myEventHandler);
+            myNioEventLoop.setMyChannelPipelineSupplier(myChannelPipelineSupplier);
             executors[i] = myNioEventLoop;
         }
     }

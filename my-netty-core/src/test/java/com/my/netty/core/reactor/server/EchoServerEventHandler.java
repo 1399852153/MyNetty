@@ -1,31 +1,35 @@
 package com.my.netty.core.reactor.server;
 
-import com.my.netty.core.reactor.handler.MyEventHandler;
+import com.my.netty.core.reactor.handler.MyChannelEventHandlerAdapter;
+import com.my.netty.core.reactor.handler.context.MyChannelHandlerContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.channels.SelectableChannel;
-import java.nio.channels.SocketChannel;
-import java.nio.charset.StandardCharsets;
-
-public class EchoServerEventHandler implements MyEventHandler {
+public class EchoServerEventHandler extends MyChannelEventHandlerAdapter {
 
     private static final Logger logger = LoggerFactory.getLogger(EchoServerEventHandler.class);
 
     @Override
-    public void fireChannelRead(SelectableChannel selectableChannel, byte[] msg) throws IOException {
-        SocketChannel socketChannel = (SocketChannel) selectableChannel;
-        String receivedStr = new String(msg, StandardCharsets.UTF_8);
+    public void channelRead(MyChannelHandlerContext ctx, Object msg) {
+        // 已经decoder过了
+        String receivedStr = (String) msg;
 
-        logger.info("echo server received message:{} ,from={}",receivedStr,socketChannel.socket().getRemoteSocketAddress());
+        logger.info("echo server received message:{}, channel={}",receivedStr,ctx.channel());
 
         // 读完了，echo服务器准备回写数据到客户端
         String echoMessage = "server echo:" + receivedStr;
-        ByteBuffer writeBuffer = ByteBuffer.allocateDirect(1024);
-        writeBuffer.put(echoMessage.getBytes(StandardCharsets.UTF_8));
-        writeBuffer.flip();
-        socketChannel.write(writeBuffer);
+
+        ctx.write(echoMessage);
+    }
+
+    @Override
+    public void exceptionCaught(MyChannelHandlerContext ctx, Throwable cause) throws Exception {
+        cause.printStackTrace();
+        ctx.close();
+    }
+
+    @Override
+    public void close(MyChannelHandlerContext ctx) throws Exception {
+        ctx.close();
     }
 }
