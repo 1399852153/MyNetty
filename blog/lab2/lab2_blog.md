@@ -1,7 +1,7 @@
 # 从零开始实现简易版Netty(二) MyNetty pipeline流水线
 
 ## 1. Netty pipeline流水线介绍
-在上一篇博客中lab1版本的MyNetty参考netty实现了一个极其精简的reactor模型。按照计划，lab2版本的MyNetty需要实现pipeline流水线，以支持不同模块处理逻辑的解耦。  
+在上一篇博客中lab1版本的MyNetty参考netty实现了一个极其精简的reactor模型。按照计划，lab2版本的MyNetty需要实现pipeline流水线，以支持不同的逻辑处理模块的解耦。  
 #####
 由于本文属于系列博客，读者需要对之前的博客内容有所了解才能更好地理解本文内容。  
 * lab1版本博客：[从零开始实现简易版Netty(一) MyNetty Reactor模式](https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)  
@@ -42,7 +42,7 @@ public interface MyChannelEventHandler {
 }
 ```
 * 前面说到，netty将入站与出站事件用两个不同的ChannelEventHandler接口进行了抽象，而在MyNetty中因为最终要支持的IO事件没有netty那么多，所以出站、入站的处理接口进行了合并。  
-  这样做虽然在架构上不如netty那样拆分开来的优雅，但相对来说理解起来会更加简单。  
+  这样做虽然在架构上不如netty那样拆分开来的设计优雅，但相对来说理解起来会更加简单。  
 * 未来MyChannelEventHandler还会随着迭代支持更多的IO事件，但这是个渐进的过程，目前lab2中只需要支持少数几个IO事件便能满足需求。
 
 ### 2.2 MyNetty的pipeline流水线与ChannelHandler上下文
@@ -172,7 +172,7 @@ public class MyChannelPipeline implements MyChannelEventInvoker {
 }
 ```
 * pipeline实现了ChannelEventInvoker接口，ChannelEventInvoker与ChannelEventHandler中对应IO事件的方法是一一对应的，唯一的区别在于其方法中缺失了(MyChannelHandlerContext ctx)参数。  
-  Invoker接口用于netty内部触发流水线的事件传播，而Handler接口用于IO事件触发时回调事件处理器。
+  Invoker接口用于netty内部触发流水线的事件传播，而Handler接口用于用户自定义IO事件触发时的事件处理器。
 * 同时，pipeline流水线中定义了两个关键属性，head和tail，其都是AbstractChannelHandlerContext类型的，其内部工作原理我们在下一小节展开。  
   pipeline提供了addFirst和addLast两个方法(netty中提供了非常多功能类似的方法，MyNetty简单起见只实现了最常用的两个)，允许将用户自定义的ChannelHandler挂载在pipeline中，与head、tail组成一个双向链表，而入站出站事件会按照双向链表中节点的顺序进行传播。  
 * 对于入站事件(比如fireChannelRead)，事件从head节点开始，从前到后的在流水线的handler链表中传播；而出站事件(比如write), 事件则从tail节点开始，从后往前的在流水线的handler链表中传播。
@@ -486,7 +486,7 @@ public class MyChannelPipelineTailContext extends MyAbstractChannelHandlerContex
 }
 ```
 * AbstractChannelHandlerContext作为ChannelHandlerContext子类的基础骨架，是理解Netty中IO事件传播机制的重中之重。AbstractChannelHandlerContext做为ChannelPipeline的实际节点，其拥有prev和next两个属性，用于关联链表中的前驱和后继。
-* 在触发IO事件时，AbstractChannelHandlerContext会按照一定的规则(具体原理在下一节展开)找到下一个需要处理当前类型IO事件的事件处理器(findContextInbound、findContextInbound)。  
+* 在触发IO事件时，AbstractChannelHandlerContext会按照一定的规则(具体原理在下一节展开)找到下一个需要处理当前类型IO事件的事件处理器(findContextInbound与findContextOutBound方法)。  
 * 在找到后会先判断当前线程与目标MyAbstractChannelHandlerContext的执行器线程是否相同(inEventLoop)，如果是则直接触发对应handler的回调方法；如果不是则将当前事件包装成一个任务交给next节点的executor执行。  
   这样设计的主要原因是netty作为一个高性能网络框架，是非常忌讳使用同步锁的。EventLoop线程是按照引入taskQueue队列多写单读的方式消费IO事件以及相关任务的，这样可以避免处理IO事件时防止不同线程间并发而大量加锁。  
 * 举个例子，一个聊天服务器，用户a通过连接A发送了一条消息给服务端，而服务端需要通过连接b将消息同步给用户b，连接a和连接b属于不同的EventLoop线程。  
@@ -499,10 +499,11 @@ public class MyChannelPipelineTailContext extends MyAbstractChannelHandlerContex
 通常情况，用户自定义的IO事件处理器一般都是各司其职的，不会对每一种IO事件都感兴趣。比如最经典的编解码handler，一般来说encode编码处理器只关心写出到远端的出站事件，而decode解码处理器只关心读取到数据的入站事件。  
 但编码、解码处理器都是位于pipeline的同一个链表中的，因此IO事件理论上会在链表中的所有处理器中传播。同时由于netty允许ChannelHandler在内部自行决定是否将事件往下一个handler节点传播，因此如果不引入特别的机制，则意味着用户自定义的每一个ChannelHandler都必须实现所有的接口方法，并在内部添加模版代码来确保事件能够继续在pipeline中传播(比如都必须实现fireChannelRead方法，并且都调用ctx.fireChannelRead方法让事件能向后传播)。  
 netty中为ChannelHandler定义了非常多的IO事件接口，如果每个ChannelHandler都必须实现所有的IO事件接口，netty的用户在实现自定义处理器时会非常痛苦，同时在高并发下不必要的方法调用也会对性能有所影响。  
-因此netty提供了Skip机制，允许用户在编写自定义处理器时仅关心自己感兴趣的IO事件，而其它事件在进行传播时能自动的跳过当前handler节点在pipeline中继续传播。
+为了解决上述问题，netty提供了Skip机制，允许用户在编写自定义处理器时仅关心自己感兴趣的IO事件，而其它事件在进行传播时能自动的跳过当前handler节点在pipeline中继续传播。
 #####
 在2.3的AbstractChannelHandlerContext实现中，可以发现事件传播的过程中关键的两个方法(findContextInbound/findContextOutbound)都是基于needSkipContext方法来实现的。
 needSkipContext方法中基于AbstractChannelHandlerContext中的一个属性executionMask来决定是否需要跳过某个ChannelHandler。  
+#####
 下面我们结合MyNetty的源码来看看这个executionMask属性是如何被计算得出，又是如何基于该掩码进行handler过滤的。 
 ##### 
 ```java
@@ -657,7 +658,7 @@ public class MyChannelEventHandlerAdapter implements MyChannelEventHandler{
 netty还提供了防共享检测机制，用来避免用户错误的使用共享ChannelHandler。  
 * 正常情况下，每个ChannelPipeline中对应的ChannelEventHandler实例都是互相独立的，但在一些场景下使用共享的ChannelHandler能带来更好的性能。对于一些无状态的，或者架构上就是全局唯一的handler(比如dubbo中维护业务线程池的Handler)，令其在不同的Channel中共享是一个好的选择。  
 * netty会在ChannelHandler加入到pipeline时对其进行检查，如果存在一个ChannelHandler实例被不止一次的注册到netty中，netty会认为其被错误的注册。因为默认情况下，一个ChannelHandler实例不能同时被注册到一个以上的channel中，否则其将出现并发问题，netty会抛出异常来警告用户。  
-  而只有当用户在对应的ChannelHandler上显示标记上@Sharable注解，明确了其就是可以共享，已经考虑过并发的可能性时，才能在重复注册时通过校验。
+  而只有当用户在对应的ChannelHandler上显式标记上@Sharable注解，明确了其就是可以共享，已经考虑过并发的可能性时，才能在重复注册时通过校验。
 * 从个人的经历来说，我在初次使用netty时曾对@Sharable注解的功能有过误解。第一感觉是在构造流水线时，被打上了@Sharable注解的Handler会类似spring的单例模式一样，即使重复注册也会被netty自动的弄成全局唯一。  
   但在了解了其工作原理后发现是反过来的，@Sharable更多的是起到一个检查的作用，避免用户错误的重复注册并发不安全的ChannelHandler。
 
@@ -698,7 +699,7 @@ netty还提供了防共享检测机制，用来避免用户错误的使用共享
 ```
 
 ## 3.MyNettyBootstrap与新版本Echo服务器demo实现
-在实现了pipeline流水线功能后，配置自定义事件处理器的方式也要有所改变，参考netty弄了个简单的Client/Server的Bootstrap，方便使用。  
+在实现了pipeline流水线功能后，配置自定义事件处理器的方式也要有所改变，MyNetty参考netty实现了一个简单的Client/Server的Bootstrap。  
 其中构建pipeline的方式与netty有所不同，netty中使用了一个特殊的ChannelInboundHandler，即ChannelInitializer。ChannelInitializer会在连接被注册时触发initChannel方法，执行用户自定义的组装pipeline的逻辑，然后再将这个特殊的Handler从链表中remove掉以完成最终channel链表的构建。  
 而MyNetty简单起见，并没有支持用户自定义channel的惰性创建，也不支持在运行时动态的增加或删除pipeline中链表中的handler(所以没有那些handler状态的临界值判断)，而是直接设计了一个MyChannelPipelineSupplier接口，在MyNIOChannel被创建时，也一并创建pipeline中的handler链表。
 ##### 服务端Bootstrap
@@ -883,13 +884,11 @@ public class ClientDemo {
     }
 }
 ```
- 
 ## 总结
 * 在lab2中，MyNetty实现了pipeline流水线机制，允许用户构造自定义处理器链条，进行功能的解耦。同时也提供了一个Bootstrap脚手架帮助用户更快捷的实现自己的网络应用程序。  
   相信在了解了MyNetty的简易版本流水线功能实现后，能帮助读者更好的理解netty中更加复杂的pipeline工作原理。
-* 目前为止，受限于MyNetty提供的简陋功能，我们的Echo服务应用程序还非常原始，大量极端场景下的临界条件都没有处理。比如分配的ByteBuffer是固定大小，无法动态扩容，接受的消息体过大就会出错；发送和接受的消息也存在黏包、拆包的问题，等等。  
-  但千里之行始于足下，在后续的lab中，MyNetty会逐步的完善上述提到的问题。
-* 在参考netty完善各种功能的过程中，读者也将能够体会到Netty的强大之处。因为在普通使用者感受不到的地方，netty底层处理了大量的边界情况，这才使得普通开发者能够基于netty高效的构建起一个足够健壮的网络应用程序。
+* 目前为止，受限于MyNetty现版本的简陋功能，我们的Echo服务应用程序还非常原始，大量极端场景下的临界条件都没有处理。比如分配的ByteBuffer是固定大小，无法动态扩容，接受的消息体过大就会出错；发送和接受的消息也存在黏包、拆包的问题，等等。千里之行始于足下，在后续的lab中，MyNetty会逐步的完善上述提到的问题。
+* 在迭代MyNetty的过程中，读者也将能够体会到Netty的强大之处。因为在普通使用者无法直接感知的地方，netty底层处理了大量的边界情况，这才使得普通开发者能够基于netty高效的构建起一个健壮的网络应用程序。
 #####
 博客中展示的完整代码在我的github上：https://github.com/1399852153/MyNetty (release/lab2_pipeline_handle 分支)，内容如有错误，还请多多指教。
 
