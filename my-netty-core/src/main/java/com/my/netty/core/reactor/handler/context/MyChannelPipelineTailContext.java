@@ -23,6 +23,12 @@ public class MyChannelPipelineTailContext extends MyAbstractChannelHandlerContex
     }
 
     @Override
+    public void channelReadComplete(MyChannelHandlerContext ctx) throws Exception {
+        // 如果channelReadComplete事件传播到了tail节点，说明用户自定义的handler没有处理好，但问题不大，打日志警告下
+        onUnhandledInboundChannelReadComplete(ctx);
+    }
+
+    @Override
     public void exceptionCaught(MyChannelHandlerContext ctx, Throwable cause) {
         // 如果exceptionCaught事件传播到了tail节点，说明用户自定义的handler没有处理好，但问题不大，打日志警告下
         onUnhandledInboundException(cause);
@@ -45,6 +51,11 @@ public class MyChannelPipelineTailContext extends MyAbstractChannelHandlerContex
         return this;
     }
 
+    @Override
+    public void fireChannelReadComplete() {
+        // doNothing
+    }
+
     private void onUnhandledInboundException(Throwable cause) {
         logger.warn(
             "An exceptionCaught() event was fired, and it reached at the tail of the pipeline. " +
@@ -59,5 +70,9 @@ public class MyChannelPipelineTailContext extends MyAbstractChannelHandlerContex
 
         logger.debug("Discarded message pipeline : {}. Channel : {}.",
             ctx.getPipeline(), ctx.channel());
+    }
+
+    private void onUnhandledInboundChannelReadComplete(MyChannelHandlerContext ctx) {
+        logger.debug("Discarded read complete pipeline : {}. Channel : {}.", ctx.getPipeline(), ctx.channel());
     }
 }

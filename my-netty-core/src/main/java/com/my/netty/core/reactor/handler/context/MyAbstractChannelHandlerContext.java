@@ -91,6 +91,24 @@ public abstract class MyAbstractChannelHandlerContext implements MyChannelHandle
     }
 
     @Override
+    public void fireChannelReadComplete() {
+        // 找到当前链条下最近的一个支持channelReadComplete方法的MyAbstractChannelHandlerContext（inbound事件，从前往后找）
+        MyAbstractChannelHandlerContext nextHandlerContext = findContextInbound(MyChannelHandlerMaskManager.MASK_CHANNEL_READ_COMPLETE);
+
+        // 调用找到的那个ChannelHandlerContext其handler的channelReadComplete方法
+
+        MyNioEventLoop myNioEventLoop = nextHandlerContext.executor();
+        if(myNioEventLoop.inEventLoop()){
+            invokeChannelReadComplete(nextHandlerContext);
+        }else{
+            // 防并发，每个针对channel的操作都由自己的eventLoop线程去执行
+            myNioEventLoop.execute(()->{
+                invokeChannelReadComplete(nextHandlerContext);
+            });
+        }
+    }
+
+    @Override
     public void close() {
         // 找到当前链条下最近的一个支持close方法的MyAbstractChannelHandlerContext（outbound事件，从后往前找）
         MyAbstractChannelHandlerContext nextHandlerContext = findContextOutbound(MyChannelHandlerMaskManager.MASK_CLOSE);
@@ -146,6 +164,15 @@ public abstract class MyAbstractChannelHandlerContext implements MyChannelHandle
     public static void invokeChannelRead(MyAbstractChannelHandlerContext next, Object msg) {
         try {
             next.handler().channelRead(next, msg);
+        }catch (Throwable t){
+            // 处理抛出的异常
+            next.invokeExceptionCaught(t);
+        }
+    }
+
+    public static void invokeChannelReadComplete(MyAbstractChannelHandlerContext next) {
+        try {
+            next.handler().channelReadComplete(next);
         }catch (Throwable t){
             // 处理抛出的异常
             next.invokeExceptionCaught(t);

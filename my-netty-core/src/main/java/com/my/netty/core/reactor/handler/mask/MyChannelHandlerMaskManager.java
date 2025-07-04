@@ -66,6 +66,10 @@ public class MyChannelHandlerMaskManager {
             mask |= MASK_CHANNEL_READ;
         }
 
+        if(!needSkip(handlerType,"channelReadComplete", MyChannelHandlerContext.class)){
+            mask |= MASK_CHANNEL_READ_COMPLETE;
+        }
+
         if(!needSkip(handlerType,"exceptionCaught", MyChannelHandlerContext.class,Throwable.class)){
             mask |= MASK_EXCEPTION_CAUGHT;
         }

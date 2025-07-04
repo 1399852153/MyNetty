@@ -5,6 +5,8 @@ public interface MyChannelEventInvoker {
     // ========================= inbound入站事件 ==============================
     void fireChannelRead(Object msg);
 
+    void fireChannelReadComplete();
+
     void fireExceptionCaught(Throwable cause);
 
     // ========================= outbound出站事件 ==============================

@@ -22,6 +22,11 @@ public class MyChannelPipelineHeadContext extends MyAbstractChannelHandlerContex
     }
 
     @Override
+    public void channelReadComplete(MyChannelHandlerContext ctx) {
+        ctx.fireChannelReadComplete();
+    }
+
+    @Override
     public void exceptionCaught(MyChannelHandlerContext ctx, Throwable cause) {
         ctx.fireExceptionCaught(cause);
     }

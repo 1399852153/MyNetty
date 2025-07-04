@@ -10,6 +10,8 @@ public interface MyChannelEventHandler {
     // ========================= inbound入站事件 ==============================
     void channelRead(MyChannelHandlerContext ctx, Object msg) throws Exception;
 
+    void channelReadComplete(MyChannelHandlerContext ctx) throws Exception;
+
     void exceptionCaught(MyChannelHandlerContext ctx, Throwable cause) throws Exception;
 
     // ========================= outbound出站事件 ==============================

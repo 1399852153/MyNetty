@@ -27,6 +27,12 @@ public class MyChannelEventHandlerAdapter implements MyChannelEventHandler{
 
     @Skip
     @Override
+    public void channelReadComplete(MyChannelHandlerContext ctx) throws Exception {
+        ctx.fireChannelReadComplete();
+    }
+
+    @Skip
+    @Override
     public void exceptionCaught(MyChannelHandlerContext ctx, Throwable cause) throws Exception {
         ctx.fireExceptionCaught(cause);
     }

@@ -50,6 +50,11 @@ public class MyChannelPipeline implements MyChannelEventInvoker {
     }
 
     @Override
+    public void fireChannelReadComplete() {
+        MyChannelPipelineHeadContext.invokeChannelReadComplete(head);
+    }
+
+    @Override
     public void fireExceptionCaught(Throwable cause) {
         // 异常传播到了pipeline的末尾，打印异常信息
         onUnhandledInboundException(cause);

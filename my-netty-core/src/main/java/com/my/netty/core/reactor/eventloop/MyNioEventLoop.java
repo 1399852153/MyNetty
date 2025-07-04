@@ -222,30 +222,7 @@ public class MyNioEventLoop implements Executor {
         // 目前所有的attachment都是MyNioChannel
         MyNioSocketChannel myNioChannel = (MyNioSocketChannel) key.attachment();
 
-        // 简单起见，buffer不缓存，每次读事件来都新创建一个
-        // 暂时也不考虑黏包/拆包场景(Netty中靠ByteToMessageDecoder解决，后续再分析其原理)，理想的认为每个消息都小于1024，且每次读事件都只有一个消息
-        ByteBuffer readBuffer = ByteBuffer.allocate(1024);
-
-        int byteRead = socketChannel.read(readBuffer);
-        logger.info("processReadEvent byteRead={}",byteRead);
-        if(byteRead == -1){
-            // 简单起见不考虑tcp半连接的情况，返回-1直接关掉连接
-            socketChannel.close();
-        }else{
-            // 将缓冲区当前的limit设置为position=0，用于后续对缓冲区的读取操作
-            readBuffer.flip();
-            // 根据缓冲区可读字节数创建字节数组
-            byte[] bytes = new byte[readBuffer.remaining()];
-            // 将缓冲区可读字节数组复制到新建的数组中
-            readBuffer.get(bytes);
-
-            if(myNioChannel != null) {
-                // 触发pipeline的读事件
-                myNioChannel.getChannelPipeline().fireChannelRead(bytes);
-            }else{
-                logger.error("processReadEvent attachment myNioChannel is null!");
-            }
-        }
+        myNioChannel.read();
     }
 
     private void doRegister(MyNioEventLoop myNioEventLoop, MyNioChannel myNioChannel){

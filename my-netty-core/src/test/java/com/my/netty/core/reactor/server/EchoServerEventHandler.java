@@ -23,6 +23,11 @@ public class EchoServerEventHandler extends MyChannelEventHandlerAdapter {
     }
 
     @Override
+    public void channelReadComplete(MyChannelHandlerContext ctx) {
+        logger.info("echo server channelReadComplete, channel={}",ctx.channel());
+    }
+
+    @Override
     public void exceptionCaught(MyChannelHandlerContext ctx, Throwable cause) throws Exception {
         cause.printStackTrace();
         ctx.close();
