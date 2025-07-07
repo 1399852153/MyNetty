@@ -1,6 +1,7 @@
 package com.my.netty.core.reactor.client;
 
 import com.my.netty.core.reactor.channel.MyNioSocketChannel;
+import com.my.netty.core.reactor.config.DefaultChannelConfig;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoop;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoopGroup;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
@@ -27,12 +28,17 @@ public class MyNioClientBootstrap {
 
     private final MyChannelPipelineSupplier myChannelPipelineSupplier;
 
-    public MyNioClientBootstrap(InetSocketAddress remoteAddress, MyChannelPipelineSupplier myChannelPipelineSupplier) {
+    private final DefaultChannelConfig defaultChannelConfig;
+
+    public MyNioClientBootstrap(InetSocketAddress remoteAddress, MyChannelPipelineSupplier myChannelPipelineSupplier,
+                                DefaultChannelConfig defaultChannelConfig) {
         this.remoteAddress = remoteAddress;
 
-        this.eventLoopGroup = new MyNioEventLoopGroup(myChannelPipelineSupplier, 1);
+        this.eventLoopGroup = new MyNioEventLoopGroup(myChannelPipelineSupplier, 1,defaultChannelConfig);
 
         this.myChannelPipelineSupplier = myChannelPipelineSupplier;
+
+        this.defaultChannelConfig = defaultChannelConfig;
     }
 
     public void start() throws IOException {
@@ -45,7 +51,7 @@ public class MyNioClientBootstrap {
             try {
                 Selector selector = myNioEventLoop.getUnwrappedSelector();
 
-                myNioSocketChannel = new MyNioSocketChannel(selector,socketChannel,myChannelPipelineSupplier);
+                myNioSocketChannel = new MyNioSocketChannel(selector,socketChannel,myChannelPipelineSupplier,defaultChannelConfig);
 
                 myNioEventLoop.register(myNioSocketChannel);
 

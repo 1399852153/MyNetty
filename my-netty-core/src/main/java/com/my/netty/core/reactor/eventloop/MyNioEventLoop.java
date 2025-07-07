@@ -2,6 +2,7 @@ package com.my.netty.core.reactor.eventloop;
 
 import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.channel.MyNioSocketChannel;
+import com.my.netty.core.reactor.config.DefaultChannelConfig;
 import com.my.netty.core.reactor.exception.MyNettyException;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
 import org.slf4j.Logger;
@@ -35,11 +36,13 @@ public class MyNioEventLoop implements Executor {
 
     private MyChannelPipelineSupplier channelPipelineSupplier;
 
-    public MyNioEventLoop(){
-        this(null);
+    private DefaultChannelConfig defaultChannelConfig;
+
+    public MyNioEventLoop(DefaultChannelConfig defaultChannelConfig){
+        this(null,defaultChannelConfig);
     }
 
-    public MyNioEventLoop(MyNioEventLoopGroup childGroup) {
+    public MyNioEventLoop(MyNioEventLoopGroup childGroup, DefaultChannelConfig defaultChannelConfig) {
         this.childGroup = childGroup;
 
         SelectorProvider selectorProvider = SelectorProvider.provider();
@@ -48,6 +51,8 @@ public class MyNioEventLoop implements Executor {
         } catch (IOException e) {
             throw new MyNettyException("open selector error!",e);
         }
+
+        this.defaultChannelConfig = defaultChannelConfig;
     }
 
     @Override
@@ -184,7 +189,7 @@ public class MyNioEventLoop implements Executor {
         socketChannel.finishConnect();
         logger.info("socketChannel={} finishConnect!",socketChannel);
 
-        MyNioSocketChannel myNioSocketChannel = new MyNioSocketChannel(this.unwrappedSelector,socketChannel,channelPipelineSupplier);
+        MyNioSocketChannel myNioSocketChannel = new MyNioSocketChannel(this.unwrappedSelector,socketChannel,channelPipelineSupplier,defaultChannelConfig);
         if(this.childGroup != null){
             // boss/worker模式，boss线程只负责接受和建立连接
             // 将建立的连接交给child线程组去处理后续的读写
@@ -217,8 +222,6 @@ public class MyNioEventLoop implements Executor {
     }
 
     private void processReadEvent(SelectionKey key) throws Exception {
-        SocketChannel socketChannel = (SocketChannel)key.channel();
-
         // 目前所有的attachment都是MyNioChannel
         MyNioSocketChannel myNioChannel = (MyNioSocketChannel) key.attachment();
 

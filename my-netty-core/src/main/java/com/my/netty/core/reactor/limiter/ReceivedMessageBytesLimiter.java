@@ -12,13 +12,8 @@ import static java.lang.Math.min;
  * */
 public class ReceivedMessageBytesLimiter {
 
-    // 简单起见，暂不支持自定义配置所分配buffer的最小，最大值
-    private static final int DEFAULT_MINIMUM = 64;
-    private static final int DEFAULT_MAXIMUM = 65536;
-
     // Use an initial value that is bigger than the common MTU of 1500
     private static final int DEFAULT_INITIAL = 2048;
-//    private static final int DEFAULT_INITIAL = 2; // 测试用
 
     private static final int INDEX_INCREMENT = 4;
     private static final int INDEX_DECREMENT = 1;
@@ -64,12 +59,24 @@ public class ReceivedMessageBytesLimiter {
     private boolean lastReadIsFull;
 
     private int index;
-    private int receiveBufferSize = DEFAULT_INITIAL;
+    private int receiveBufferSize;
 
     /**
      * 最多一次IO事件read多少次
      * */
     private final int maxMessagesPerRead = 16;
+
+    public ReceivedMessageBytesLimiter() {
+        this(DEFAULT_INITIAL);
+    }
+
+    public ReceivedMessageBytesLimiter(int receiveBufferSize) {
+        if(receiveBufferSize <= 0) {
+            receiveBufferSize = DEFAULT_INITIAL;
+        }
+
+        this.receiveBufferSize = receiveBufferSize;
+    }
 
     public int getReceiveBufferSize(){
         return receiveBufferSize;

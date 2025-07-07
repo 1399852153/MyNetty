@@ -3,6 +3,7 @@ package com.my.netty.core.reactor.client;
 import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.codec.EchoMessageDecoder;
 import com.my.netty.core.reactor.codec.EchoMessageEncoder;
+import com.my.netty.core.reactor.config.DefaultChannelConfig;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
 
@@ -13,6 +14,9 @@ import java.util.Scanner;
 public class ClientDemo {
 
     public static void main(String[] args) throws IOException {
+        DefaultChannelConfig defaultChannelConfig = new DefaultChannelConfig();
+        defaultChannelConfig.setInitialReceiveBufferSize(16); // 设置小一点，方便测试
+
         MyNioClientBootstrap myNioClientBootstrap = new MyNioClientBootstrap(new InetSocketAddress(8080),new MyChannelPipelineSupplier() {
             @Override
             public MyChannelPipeline buildMyChannelPipeline(MyNioChannel myNioChannel) {
@@ -23,7 +27,8 @@ public class ClientDemo {
                 myChannelPipeline.addLast(new EchoClientEventHandler());
                 return myChannelPipeline;
             }
-        });
+        }, defaultChannelConfig);
+
         myNioClientBootstrap.start();
 
         System.out.println("please input message:");

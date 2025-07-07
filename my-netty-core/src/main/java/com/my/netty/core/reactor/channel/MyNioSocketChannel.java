@@ -1,6 +1,7 @@
 package com.my.netty.core.reactor.channel;
 
 
+import com.my.netty.core.reactor.config.DefaultChannelConfig;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
 import com.my.netty.core.reactor.limiter.ReceivedMessageBytesLimiter;
 import org.slf4j.Logger;
@@ -15,13 +16,19 @@ public class MyNioSocketChannel extends MyNioChannel{
     private static final Logger logger = LoggerFactory.getLogger(MyNioSocketChannel.class);
 
     private final SocketChannel socketChannel;
-    private final ReceivedMessageBytesLimiter receivedMessageBytesLimiter = new ReceivedMessageBytesLimiter();
+    private final ReceivedMessageBytesLimiter receivedMessageBytesLimiter;
+    private final DefaultChannelConfig defaultChannelConfig;
 
     public MyNioSocketChannel(
-        Selector selector, SocketChannel socketChannel, MyChannelPipelineSupplier myChannelPipelineSupplier) {
+        Selector selector, SocketChannel socketChannel, MyChannelPipelineSupplier myChannelPipelineSupplier,
+        DefaultChannelConfig defaultChannelConfig) {
         super(selector,socketChannel,myChannelPipelineSupplier);
 
         this.socketChannel = socketChannel;
+
+        this.defaultChannelConfig = defaultChannelConfig;
+
+        this.receivedMessageBytesLimiter = new ReceivedMessageBytesLimiter(defaultChannelConfig.getInitialReceiveBufferSize());
     }
 
     public SocketChannel getSocketChannel() {

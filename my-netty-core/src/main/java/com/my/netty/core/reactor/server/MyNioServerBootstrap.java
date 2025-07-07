@@ -1,5 +1,6 @@
 package com.my.netty.core.reactor.server;
 
+import com.my.netty.core.reactor.config.DefaultChannelConfig;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoop;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoopGroup;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
@@ -22,11 +23,11 @@ public class MyNioServerBootstrap {
 
     public MyNioServerBootstrap(InetSocketAddress endpointAddress,
                                 MyChannelPipelineSupplier childChannelPipelineSupplier,
-                                int bossThreads, int childThreads) {
+                                int bossThreads, int childThreads, DefaultChannelConfig defaultChannelConfig) {
         this.endpointAddress = endpointAddress;
 
-        MyNioEventLoopGroup childGroup = new MyNioEventLoopGroup(childChannelPipelineSupplier,childThreads);
-        this.bossGroup = new MyNioEventLoopGroup(childChannelPipelineSupplier, bossThreads, childGroup);
+        MyNioEventLoopGroup childGroup = new MyNioEventLoopGroup(childChannelPipelineSupplier,childThreads,defaultChannelConfig);
+        this.bossGroup = new MyNioEventLoopGroup(childChannelPipelineSupplier, bossThreads, childGroup,defaultChannelConfig);
     }
 
     public void start() throws IOException {
