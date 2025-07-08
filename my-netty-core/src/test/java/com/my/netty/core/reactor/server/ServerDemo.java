@@ -10,7 +10,7 @@ public class ServerDemo {
 
     public static void main(String[] args) throws IOException {
         MyNettyNioServer myNioServer = new MyNettyNioServer(
-            new InetSocketAddress(8080),new EchoClientEventHandler(),1,5);
+            new InetSocketAddress(8080),new EchoServerEventHandler(),1,5);
         myNioServer.start();
 
         LockSupport.park();

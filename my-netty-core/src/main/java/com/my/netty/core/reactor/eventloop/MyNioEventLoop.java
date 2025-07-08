@@ -170,11 +170,12 @@ public class MyNioEventLoop implements Executor {
         if(this.childGroup != null){
             // boss/worker模式，boss线程只负责接受和建立连接
             // 将建立的连接交给child线程组去处理后续的读写
-            childGroup.next().execute(()->{
-                doRegister(socketChannel);
+            MyNioEventLoop childEventLoop = childGroup.next();
+            childEventLoop.execute(()->{
+                doRegister(childEventLoop,socketChannel);
             });
         }else{
-            doRegister(socketChannel);
+            doRegister(this,socketChannel);
         }
     }
 
@@ -207,6 +208,8 @@ public class MyNioEventLoop implements Executor {
         if(byteRead == -1){
             // 简单起见不考虑tcp半连接的情况，返回-1直接关掉连接
             socketChannel.close();
+            // 取消key的监听
+            key.cancel();
         }else{
             // 将缓冲区当前的limit设置为position=0，用于后续对缓冲区的读取操作
             readBuffer.flip();
@@ -221,7 +224,7 @@ public class MyNioEventLoop implements Executor {
         }
     }
 
-    private void doRegister(SocketChannel socketChannel){
+    private void doRegister(MyNioEventLoop myNioEventLoop, SocketChannel socketChannel){
         try {
             // nio的非阻塞channel
             socketChannel.configureBlocking(false);
@@ -231,7 +234,7 @@ public class MyNioEventLoop implements Executor {
             logger.info("socketChannel={} finishConnect!",socketChannel);
 
             // 将接受到的连接注册到selector中，并监听read事件
-            socketChannel.register(unwrappedSelector, SelectionKey.OP_READ);
+            socketChannel.register(myNioEventLoop.unwrappedSelector, SelectionKey.OP_READ);
 
             logger.info("socketChannel={} doRegister success!",socketChannel);
         }catch (Exception e){
