@@ -231,6 +231,8 @@ public class MyNioEventLoop implements Executor {
         if(byteRead == -1){
             // 简单起见不考虑tcp半连接的情况，返回-1直接关掉连接
             socketChannel.close();
+
+            key.cancel();
         }else{
             // 将缓冲区当前的limit设置为position=0，用于后续对缓冲区的读取操作
             readBuffer.flip();
