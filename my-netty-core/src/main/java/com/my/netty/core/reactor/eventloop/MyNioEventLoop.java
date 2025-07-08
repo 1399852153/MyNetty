@@ -225,7 +225,7 @@ public class MyNioEventLoop implements Executor {
         // 目前所有的attachment都是MyNioChannel
         MyNioSocketChannel myNioChannel = (MyNioSocketChannel) key.attachment();
 
-        myNioChannel.read();
+        myNioChannel.read(key);
     }
 
     private void doRegister(MyNioEventLoop myNioEventLoop, MyNioChannel myNioChannel){

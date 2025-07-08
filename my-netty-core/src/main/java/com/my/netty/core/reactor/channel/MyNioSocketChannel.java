@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 
@@ -35,7 +36,11 @@ public class MyNioSocketChannel extends MyNioChannel{
         return socketChannel;
     }
 
-    public void read() throws IOException {
+    public DefaultChannelConfig getDefaultChannelConfig() {
+        return defaultChannelConfig;
+    }
+
+    public void read(SelectionKey key) throws IOException {
         // receivedMessageLimiter相当于netty中简化版的不包含buffer类型分配的RecvByteBufAllocator(参考自AdaptiveRecvByteBufAllocator)
         // 新的一次read事件开始前，刷新下readLimiter的状态
         receivedMessageBytesLimiter.reset();
@@ -53,6 +58,8 @@ public class MyNioSocketChannel extends MyNioChannel{
             if (byteRead < 0) {
                 // 简单起见不考虑tcp半连接的情况，返回-1直接关掉连接
                 socketChannel.close();
+                // 取消key的监听
+                key.cancel();
             } else if(byteRead == 0){
                 // 当前读事件已经读取完毕了，退出循环
                 break;
