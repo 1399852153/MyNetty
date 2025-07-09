@@ -1,0 +1,58 @@
+# 从零开始实现简易版Netty(三) MyNetty 高效的数据读取实现
+## 1. MyNetty 高效的数据读取功能介绍
+在上一篇博客中，lab2版本的MyNetty实现了基本的reactor模型和一个简易的pipeline流水线处理机制。  
+目前的MyNetty就像一款手搓的拖拉机，勉强能晃晃悠悠的跑起来，但碰到一点极端的路况就会抛锚甚至散架。对于很多边界场景，现版本的MyNetty都无力应对。  
+MyNetty的目标是实现一个简易的netty，因此虽然不可能像Netty那边健壮，丝滑的处理绝大多数极端场景，但也会对一些较为常见的场景进行针对性的优化。  
+#####
+按照计划，本篇博客中，lab3版本的MyNetty需要实现高效的数据读取。由于本文属于系列博客，读者需要对之前的博客内容有所了解才能更好地理解本文内容。
+* lab1版本博客：[从零开始实现简易版Netty(一) MyNetty Reactor模式] (https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)  
+* lab2版本博客：[从零开始实现简易版Netty(二) MyNetty pipeline流水线] (https://www.cnblogs.com/xiaoxiongcanguan/p/18964326)  
+#####
+在分析lab3的MyNetty源码实现之前，我们先来看看当前版本的MyNetty中对于IO读事件的处理主要有哪些问题。
+##### lab2版本MyNetty读事件处理源码
+```java
+    private void processReadEvent(SelectionKey key) throws Exception {
+        SocketChannel socketChannel = (SocketChannel)key.channel();
+
+        // 目前所有的attachment都是MyNioChannel
+        MyNioSocketChannel myNioChannel = (MyNioSocketChannel) key.attachment();
+
+        // 简单起见，buffer不缓存，每次读事件来都新创建一个
+        // 暂时也不考虑黏包/拆包场景(Netty中靠ByteToMessageDecoder解决，后续再分析其原理)，理想的认为每个消息都小于1024，且每次读事件都只有一个消息
+        ByteBuffer readBuffer = ByteBuffer.allocate(1024);
+
+        int byteRead = socketChannel.read(readBuffer);
+        logger.info("processReadEvent byteRead={}",byteRead);
+        if(byteRead == -1){
+            // 简单起见不考虑tcp半连接的情况，返回-1直接关掉连接
+            socketChannel.close();
+
+            key.cancel();
+        }else{
+            // 将缓冲区当前的limit设置为position=0，用于后续对缓冲区的读取操作
+            readBuffer.flip();
+            // 根据缓冲区可读字节数创建字节数组
+            byte[] bytes = new byte[readBuffer.remaining()];
+            // 将缓冲区可读字节数组复制到新建的数组中
+            readBuffer.get(bytes);
+
+            if(myNioChannel != null) {
+                // 触发pipeline的读事件
+                myNioChannel.getChannelPipeline().fireChannelRead(bytes);
+            }else{
+                logger.error("processReadEvent attachment myNioChannel is null!");
+            }
+        }
+    }
+```
+#####
+从上面的源码实现中可以看到，lab2版本的MyNetty在处理事件循环的读事件时，至少存在以下三个问题。  
+1. 理想的假设了每次读事件中消息的大小都小于1024个字节，实际超过时会出现各种问题
+2. 每次处理读事件都临时创建一个新的ByteBuffer，没有支持ByteBuffer的池化功能
+3. 没有提供方便的处理黏包、拆包场景的功能
+#####
+这三个问题分别涉及到不同的方向，限于篇幅不会在一次迭代中全部优化。在本篇博客中，lab3版本的Netty主要优化第一个问题，剩下的两个问题的优化会在后续的迭代中逐步完成。  
+
+## 2. MyNetty 高效的数据读取实现源码解析
+
+

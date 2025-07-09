@@ -4,7 +4,7 @@
 在上一篇博客中lab1版本的MyNetty参考netty实现了一个极其精简的reactor模型。按照计划，lab2版本的MyNetty需要实现pipeline流水线，以支持不同的逻辑处理模块的解耦。  
 #####
 由于本文属于系列博客，读者需要对之前的博客内容有所了解才能更好地理解本文内容。  
-* lab1版本博客：[从零开始实现简易版Netty(一) MyNetty Reactor模式](https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)  
+* lab1版本博客：[从零开始实现简易版Netty(一) MyNetty Reactor模式] (https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)  
 
 #####
 在lab1版本中，MyNetty的EventLoop处理逻辑中，允许使用者配置一个EventHandler，并在处理read事件时调用其实现的自定义fireChannelRead方法。  
