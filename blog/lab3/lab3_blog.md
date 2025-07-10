@@ -256,4 +256,11 @@ public class ReceivedMessageBytesLimiter {
 }
 ```
 #####
+* netty的实现中在AbstractNioByteChannel使用RecvByteBufAllocator.Handle来限制读事件的。而MyNetty中目前还没有实现ByteBuffer的池化能力，所以单独定义了一个类ReceivedMessageBytesLimiter，专门用于处理读事件，逻辑基本是参考Netty的。  
+* 每个channel都拥有一个自己独有的ReceivedMessageBytesLimiter用于记录本channel最近读取的字节数，用来动态的调整下一次读取数据时的ByteBuffer的大小。
+* Netty为接收容器的大小设定了一系列的规格，其中绝对字节数偏小的规格密度较大，16-512的区间内，每16字节一个规格。因为大多数时候channel的流量都是较小的，精细的设计规格可以在扩容时不会过于激进，从而一定程度上节约内存。  
+  而在512字节以上的区间，则是按照2次幂来设置规格，netty的设计者认为一旦扩容到该区间时，说明流量确实很大，相比节约内存，尽快扩容到一个合适的大容量容器以更快的消费流量更重要。当然，netty也限制了读取容器的最大值为128M，避免单个channel就把内存耗尽。
+* 在扩缩容调整容器大小时，扩容的策略比较激进，当发现容器可能不足以完全承载数据时，规格直接增加4级；而缩容时则保守的多，只有当连续两次都低于阈值时才将规格降低1级。
+* MyNetty为MyChannelHandler新增了channelReadComplete这一IO事件，在一次读事件完成时，就会触发该事件。无论是因为数据已经被读取完，还是因为读取限制策略而主动的退出了读，都视作完成了当前IO读事件。
 
+## 总结
