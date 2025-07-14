@@ -1,11 +1,13 @@
 package com.my.netty.core.reactor.handler.context;
 
 
+import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.handler.MyChannelEventHandler;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
 
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * pipeline的head哨兵节点
@@ -38,16 +40,9 @@ public class MyChannelPipelineHeadContext extends MyAbstractChannelHandlerContex
     }
 
     @Override
-    public void write(MyChannelHandlerContext ctx, Object msg) throws Exception {
-        // 往外写的操作，一定是socketChannel
-        SocketChannel socketChannel = (SocketChannel) ctx.getPipeline().getChannel().getJavaChannel();
-
-        if(msg instanceof ByteBuffer){
-            socketChannel.write((ByteBuffer) msg);
-        }else{
-            // msg走到head节点的时候，必须是ByteBuffer类型
-            throw new Error();
-        }
+    public void write(MyChannelHandlerContext ctx, Object msg, boolean doFlush, CompletableFuture<MyNioChannel> completableFuture) throws Exception {
+        // head是最后一个outBoundHandler，处理最终的写出操作
+        ctx.getPipeline().getChannel().doWrite(msg,doFlush,completableFuture);
     }
 
     @Override

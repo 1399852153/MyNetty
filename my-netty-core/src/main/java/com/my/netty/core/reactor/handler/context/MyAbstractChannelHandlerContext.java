@@ -9,6 +9,8 @@ import com.my.netty.core.reactor.util.ThrowableUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.concurrent.CompletableFuture;
+
 public abstract class MyAbstractChannelHandlerContext implements MyChannelHandlerContext{
 
     private static final Logger logger = LoggerFactory.getLogger(MyAbstractChannelHandlerContext.class);
@@ -133,26 +135,37 @@ public abstract class MyAbstractChannelHandlerContext implements MyChannelHandle
     }
 
     @Override
-    public void write(Object msg) {
+    public CompletableFuture<MyNioChannel> write(Object msg, boolean doFlush) {
+        CompletableFuture<MyNioChannel> completableFuture = new CompletableFuture<>();
+
+        return write(msg,doFlush,completableFuture);
+    }
+
+    @Override
+    public CompletableFuture<MyNioChannel> write(Object msg, boolean doFlush, CompletableFuture<MyNioChannel> completableFuture) {
         // 找到当前链条下最近的一个支持write方法的MyAbstractChannelHandlerContext（outbound事件，从后往前找）
         MyAbstractChannelHandlerContext nextHandlerContext = findContextOutbound(MyChannelHandlerMaskManager.MASK_WRITE);
 
         MyNioEventLoop myNioEventLoop = nextHandlerContext.executor();
         if(myNioEventLoop.inEventLoop()){
-            doWrite(nextHandlerContext,msg);
+            doWrite(nextHandlerContext,msg,doFlush,completableFuture);
         }else{
             // 防并发，每个针对channel的操作都由自己的eventLoop线程去执行
             myNioEventLoop.execute(()->{
-                doWrite(nextHandlerContext,msg);
+                doWrite(nextHandlerContext,msg,doFlush,completableFuture);
             });
         }
+
+        return completableFuture;
     }
 
-    private void doWrite(MyAbstractChannelHandlerContext nextHandlerContext, Object msg) {
+    private void doWrite(MyAbstractChannelHandlerContext nextHandlerContext, Object msg, boolean doFlush, CompletableFuture<MyNioChannel> completableFuture) {
         try {
-            nextHandlerContext.handler().write(nextHandlerContext,msg);
+            nextHandlerContext.handler().write(nextHandlerContext,msg,doFlush,completableFuture);
         } catch (Throwable t) {
             logger.error("{} do write error!",nextHandlerContext,t);
+
+            completableFuture.completeExceptionally(t);
         }
     }
 

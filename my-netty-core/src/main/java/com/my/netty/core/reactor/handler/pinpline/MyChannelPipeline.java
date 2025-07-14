@@ -13,6 +13,8 @@ import com.my.netty.core.reactor.handler.context.MyDefaultChannelHandlerContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.concurrent.CompletableFuture;
+
 /**
  * pipeline首先自己也是一个Invoker
  *
@@ -67,8 +69,13 @@ public class MyChannelPipeline implements MyChannelEventInvoker {
     }
 
     @Override
-    public void write(Object msg) {
-        tail.write(msg);
+    public CompletableFuture<MyNioChannel> write(Object msg, boolean doFlush) {
+        return tail.write(msg,doFlush);
+    }
+
+    @Override
+    public CompletableFuture<MyNioChannel> write(Object msg, boolean doFlush, CompletableFuture<MyNioChannel> completableFuture) {
+        return tail.write(msg,doFlush,completableFuture);
     }
 
     public void addFirst(MyChannelEventHandler handler){

@@ -19,7 +19,7 @@ public class EchoServerEventHandler extends MyChannelEventHandlerAdapter {
         // 读完了，echo服务器准备回写数据到客户端
         String echoMessage = "server echo:" + receivedStr;
 
-        ctx.write(echoMessage);
+        ctx.write(echoMessage,true);
     }
 
     @Override

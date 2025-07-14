@@ -85,7 +85,7 @@ public class MyNioClientBootstrap {
         writeBuffer.flip();
         // 写完了，flip供后续去读取
 
-        myNioSocketChannel.getChannelPipeline().write(msg);
+        myNioSocketChannel.getChannelPipeline().write(msg,true);
 
     }
 }

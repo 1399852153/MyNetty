@@ -1,10 +1,12 @@
 package com.my.netty.core.reactor.handler;
 
 
+import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.handler.annotation.Sharable;
 import com.my.netty.core.reactor.handler.annotation.Skip;
 import com.my.netty.core.reactor.handler.context.MyChannelHandlerContext;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -45,10 +47,9 @@ public class MyChannelEventHandlerAdapter implements MyChannelEventHandler{
 
     @Skip
     @Override
-    public void write(MyChannelHandlerContext ctx, Object msg) throws Exception {
-        ctx.write(msg);
+    public void write(MyChannelHandlerContext ctx, Object msg, boolean doFlush, CompletableFuture<MyNioChannel> completableFuture) throws Exception {
+        ctx.write(msg,doFlush,completableFuture);
     }
-
 
     private static ConcurrentHashMap<Class<?>, Boolean> isSharableCacheMap = new ConcurrentHashMap<>();
 

@@ -1,9 +1,12 @@
 package com.my.netty.core.reactor.handler.context;
 
+import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.handler.MyChannelEventHandler;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.CompletableFuture;
 
 /**
  * pipeline的tail哨兵节点
@@ -41,7 +44,7 @@ public class MyChannelPipelineTailContext extends MyAbstractChannelHandlerContex
     }
 
     @Override
-    public void write(MyChannelHandlerContext ctx, Object msg) throws Exception {
+    public void write(MyChannelHandlerContext ctx, Object msg, boolean doFlush, CompletableFuture<MyNioChannel> completableFuture) throws Exception {
         // do nothing
         logger.info("write op, tail context do nothing");
     }
