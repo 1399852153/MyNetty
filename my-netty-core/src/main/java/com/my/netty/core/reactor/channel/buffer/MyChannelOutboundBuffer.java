@@ -145,7 +145,6 @@ public class MyChannelOutboundBuffer {
     public boolean remove() {
         MyChannelOutBoundBufferEntry entry = flushedEntry;
         if (entry == null) {
-//            clearNioBuffers();  todo 待研究是干什么的
             return false;
         }
 

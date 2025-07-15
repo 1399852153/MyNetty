@@ -98,9 +98,9 @@ public class MyNioSocketChannel extends MyNioChannel{
     @Override
     protected void doWrite(MyChannelOutboundBuffer myChannelOutboundBuffer) throws Exception {
         // 默认一次写出16次
-//        int writeSpinCount = 16;
+        int writeSpinCount = 16;
 
-        int writeSpinCount = 2;  // 方便测试
+//        int writeSpinCount = 2;  // 方便测试
 
         do {
             if (myChannelOutboundBuffer.isEmpty()) {
@@ -120,9 +120,8 @@ public class MyNioSocketChannel extends MyNioChannel{
 
             // 调用jdk channel的write方法一次性写入byteBuffer集合
             final long localWrittenBytes = socketChannel.write(byteBuffers,0, needWriteByteBufferList.size());
-            System.out.println("localWrittenBytes=" + localWrittenBytes +
-                " attemptedBytes=" + myChannelOutboundBuffer.getNioBufferSize() +
-                " needWriteByteBufferList.size=" + needWriteByteBufferList.size());
+            logger.info("localWrittenBytes={},attemptedBytes={},needWriteByteBufferList.size={}"
+                , localWrittenBytes, myChannelOutboundBuffer.getNioBufferSize(),needWriteByteBufferList.size());
             if (localWrittenBytes <= 0) {
                 // 返回值localWrittenBytes小于等于0，说明当前Socket缓冲区写满了，不能再写入了。注册一个OP_WRITE事件(setOpWrite=true)，
                 // 当channel所在的NIO循环中监听到当前channel的OP_WRITE事件时，就说明缓冲区又可写了，在对应逻辑里继续执行写入操作

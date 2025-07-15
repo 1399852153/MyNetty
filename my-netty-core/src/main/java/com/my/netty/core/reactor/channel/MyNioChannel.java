@@ -136,6 +136,11 @@ public abstract class MyNioChannel {
         }
     }
 
+    public boolean isWritable() {
+        MyChannelOutboundBuffer buf = this.myChannelOutboundBuffer;
+        return buf != null && buf.isWritable();
+    }
+
     protected abstract void doWrite(MyChannelOutboundBuffer channelOutboundBuffer) throws Exception;
 
     protected final void setOpWrite() {
