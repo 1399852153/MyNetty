@@ -24,7 +24,17 @@ public class MyChannelOutboundBufferTest {
 
         myChannelOutboundBuffer.addFlush();
 
-        myChannelOutboundBuffer.removeBytes(20);
+        // 模拟buffer完全的写出
+        byteBuffer.get(new byte[byteBuffer.remaining()]);
+        Assert.assertFalse(byteBuffer.hasRemaining());
+
+        byteBuffer2.get(new byte[byteBuffer2.remaining()]);
+        Assert.assertFalse(byteBuffer2.hasRemaining());
+
+        byteBuffer3.get(new byte[byteBuffer3.remaining()]);
+        Assert.assertFalse(byteBuffer3.hasRemaining());
+
+        myChannelOutboundBuffer.removeBytes(2+4+14);
 
         Assert.assertTrue(myChannelOutboundBuffer.isEmpty());
     }
@@ -44,7 +54,18 @@ public class MyChannelOutboundBufferTest {
 
         myChannelOutboundBuffer.addFlush();
 
-        myChannelOutboundBuffer.removeBytes(18);
+        // 模拟buffer写出
+        byteBuffer.get(new byte[byteBuffer.remaining()]);
+        Assert.assertFalse(byteBuffer.hasRemaining());
+
+        byteBuffer2.get(new byte[byteBuffer2.remaining()]);
+        Assert.assertFalse(byteBuffer2.hasRemaining());
+
+        // 模拟byteBuffer3留了一点没写出去
+        byteBuffer3.get(new byte[byteBuffer3.remaining()-2]);
+        Assert.assertTrue(byteBuffer3.hasRemaining());
+
+        myChannelOutboundBuffer.removeBytes((2+4+14) - 2);
 
         Assert.assertFalse(myChannelOutboundBuffer.isEmpty());
     }
