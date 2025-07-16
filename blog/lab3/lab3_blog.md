@@ -5,8 +5,8 @@
 MyNetty的目标是实现一个简易的netty，虽然不可能像Netty那般健壮，能丝滑的处理绝大多数极端场景，但也会对一些常见的场景进行针对性优化。  
 #####
 按照计划，本篇博客中，lab3版本的MyNetty需要实现高效的数据读取。由于本文属于系列博客，读者需要对之前的博客内容有所了解才能更好地理解本文内容。
-* lab1版本博客：[从零开始实现简易版Netty(一) MyNetty Reactor模式] (https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)  
-* lab2版本博客：[从零开始实现简易版Netty(二) MyNetty pipeline流水线] (https://www.cnblogs.com/xiaoxiongcanguan/p/18964326)  
+* lab1版本博客：[从零开始实现简易版Netty(一) MyNetty Reactor模式](https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)  
+* lab2版本博客：[从零开始实现简易版Netty(二) MyNetty pipeline流水线](https://www.cnblogs.com/xiaoxiongcanguan/p/18964326)  
 #####
 在分析lab3的MyNetty源码实现之前，我们先来看看当前版本的MyNetty中对于IO读事件的处理主要有哪些问题。
 ##### lab2版本MyNetty读事件处理源码

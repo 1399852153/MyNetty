@@ -1,9 +1,13 @@
 package com.my.netty.core.reactor.server;
 
+import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.handler.MyChannelEventHandlerAdapter;
 import com.my.netty.core.reactor.handler.context.MyChannelHandlerContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
 
 public class EchoServerEventHandler extends MyChannelEventHandlerAdapter {
 
@@ -19,7 +23,13 @@ public class EchoServerEventHandler extends MyChannelEventHandlerAdapter {
         // 读完了，echo服务器准备回写数据到客户端
         String echoMessage = "server echo:" + receivedStr;
 
-        ctx.write(echoMessage,true);
+        CompletableFuture channelCompletedFuture = ctx.write(echoMessage,true);
+        channelCompletedFuture.whenComplete(new BiConsumer<MyNioChannel, Throwable>() {
+            @Override
+            public void accept(MyNioChannel myNioChannel, Throwable throwable) {
+                logger.info("write message success! channel={}",myNioChannel);
+            }
+        });
     }
 
     @Override
