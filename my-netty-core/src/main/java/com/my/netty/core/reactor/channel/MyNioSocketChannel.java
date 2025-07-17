@@ -98,9 +98,9 @@ public class MyNioSocketChannel extends MyNioChannel{
     @Override
     protected void doWrite(MyChannelOutboundBuffer myChannelOutboundBuffer) throws Exception {
         // 默认一次写出16次
-        int writeSpinCount = 16;
+//        int writeSpinCount = 16;
 
-//        int writeSpinCount = 2;  // 方便测试
+        int writeSpinCount = 2;  // 方便测试
 
         do {
             if (myChannelOutboundBuffer.isEmpty()) {
