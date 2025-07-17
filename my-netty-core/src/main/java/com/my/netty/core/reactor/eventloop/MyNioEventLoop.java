@@ -114,7 +114,7 @@ public class MyNioEventLoop implements Executor {
                 }
 
                 // 简单起见，暂不实现基于时间等元素的更为公平的执行策略
-                // 直接先处理io，再处理所有task(ioRatio=100)
+                // 直接先处理io，再处理所有task(ioRatio=100), netty默认ioRatio=50(比如处理某个channel大量写出时，可以公平一点)
                 try {
                     // 处理监听到的io事件
                     processSelectedKeys();
@@ -152,6 +152,11 @@ public class MyNioEventLoop implements Executor {
                 if (key.isReadable()) {
                     // 处理read事件
                     processReadEvent(key);
+                }
+
+                if(key.isWritable()){
+                    // 处理OP_WRITE事件（setOpWrite中注册的）
+                    processWriteEvent(key);
                 }
             }catch (Throwable e){
                 logger.error("server event loop process an selectionKey error!",e);
@@ -226,6 +231,14 @@ public class MyNioEventLoop implements Executor {
         MyNioSocketChannel myNioChannel = (MyNioSocketChannel) key.attachment();
 
         myNioChannel.read(key);
+    }
+
+    private void processWriteEvent(SelectionKey key) throws IOException {
+        // 目前所有的attachment都是MyNioChannel
+        MyNioSocketChannel myNioChannel = (MyNioSocketChannel) key.attachment();
+
+        // 执行flush0方法
+        myNioChannel.flush0();
     }
 
     private void doRegister(MyNioEventLoop myNioEventLoop, MyNioChannel myNioChannel){

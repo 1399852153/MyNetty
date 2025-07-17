@@ -1,6 +1,7 @@
 package com.my.netty.core.reactor.handler.mask;
 
 import com.my.netty.core.reactor.handler.MyChannelEventHandler;
+import com.my.netty.core.reactor.handler.MyChannelEventHandlerAdapter;
 import com.my.netty.core.reactor.handler.annotation.Skip;
 import com.my.netty.core.reactor.handler.context.MyChannelHandlerContext;
 import org.slf4j.Logger;
@@ -9,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.WeakHashMap;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 计算并缓存每一个类型的handler所需要处理方法掩码的管理器
@@ -78,7 +80,7 @@ public class MyChannelHandlerMaskManager {
             mask |= MASK_CLOSE;
         }
 
-        if(!needSkip(handlerType,"write", MyChannelHandlerContext.class,Object.class)){
+        if(!needSkip(handlerType,"write", MyChannelHandlerContext.class, Object.class, boolean.class, CompletableFuture.class)){
             mask |= MASK_WRITE;
         }
 

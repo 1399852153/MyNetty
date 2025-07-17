@@ -88,7 +88,7 @@ public class MyChannelOutboundBuffer {
         if (flushedEntry == null) {
             // there is no flushedEntry yet, so start with the entry
 
-            // 当前需要flush的队列(flushedEntry为head)为空，调转指针，将unFlushed队列中的消息全部转为待flushedEntry
+            // 当前需要flush的队列(flushedEntry为head)为空，调转指针，将unFlushed队列中的消息全部转为待flushedEntry(相当于重新取了一批数据来写出)
             flushedEntry = entry;
         }
 

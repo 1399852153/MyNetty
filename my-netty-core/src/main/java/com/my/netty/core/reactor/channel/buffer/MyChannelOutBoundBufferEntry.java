@@ -17,7 +17,7 @@ class MyChannelOutBoundBufferEntry {
     //  netty中ChannelOutboundBuffer的Entry对象属性较多，16 + 6*8 + 2*8 + 2*4 + 1 = 89
     //  往大了计算，未开启指针压缩时，64位机器按照8的倍数向上取整，算出填充默认需要96字节(netty中可通过系统参数(io.netty.transport.outboundBufferEntrySizeOverhead)动态配置)
     //  MyNetty做了简化，暂时没那么属性，但这里就不改了，只是多浪费了一些空间
-    // 详细的计算方式可参考大佬的博客：https://www.cnblogs.com/binlovetech/p/16453634.html
+    //  详细的计算方式可参考大佬的博客：https://www.cnblogs.com/binlovetech/p/16453634.html
     private static final int DEFAULT_CHANNEL_OUTBOUND_BUFFER_ENTRY_OVERHEAD = 96;
 
     MyChannelOutBoundBufferEntry next;
