@@ -8,7 +8,7 @@
 
 #####
 目前版本的实现中，MyNetty允许用户在自定义的ChannelHandler中使用ChannelHandlerContext的write方法向远端写出消息。  
-write操作被视为一个出站事件会一直从后往前传播到head节点，在pipeline流水线的head节点中通过jdk的socketChannel.write方法将消息写出。
+write操作被视为一个出站事件会一直从后往前传播到head节点，最终在pipeline流水线的head节点中通过jdk的socketChannel.write方法将消息写出。
 ##### demo中的EchoServerEventHandler实现
 ```java
 public class EchoServerEventHandler extends MyChannelEventHandlerAdapter {
@@ -25,13 +25,12 @@ public class EchoServerEventHandler extends MyChannelEventHandlerAdapter {
 }    
 ```
 #####
-面对大量的待读取消息，Netty针对性的实现了如启发式算法动态调节buffer容器大小、限制单channel读事件中读取消息的次数以避免其它channel饥饿等机制。  
+面对大量的待读取消息，Netty针对性的实现了启发式算法动态调节buffer容器大小、限制单channel读事件中读取消息的次数以避免其它channel饥饿等机制。  
 同样的，如果需要短时间内向外写出大量的消息时，目前版本MyNetty中简单的socketChannel.write来实现写出功能是远远不够的，极端场景下同样存在很多问题。  
-1. 操作系统向外发送数据的缓冲区是有限的，当网络拥塞、系统负载过高等场景时，通过socketChannel.write写出的数据并不能总是完全成功的写出，而是可能部分甚至全部都无法写出。  
-   此时，未成功写出的数据需要由应用程序自己维护好，等待缓冲区空闲后进行重试。  
+1. 操作系统向外发送数据的缓冲区是有限的，当网络拥塞、系统负载过高等场景时，通过socketChannel.write写出的数据并不能总是完全成功的写出，而是可能部分甚至全部都无法写出。此时，未成功写出的数据需要由应用程序自己维护好，等待缓冲区空闲后进行重试。  
 2. write方法的执行是异步的，事件循环线程a发出的消息可能实际上是由线程b来真正的写出，而线程b又不总是能一次成功的写出消息。
    MyNetty中线程a目前无法感知到write方法发送的消息是否被成功写出，同时也无法在缓冲区负载较高时，主动限制自己写出消息的速率而在源头实现限流。
-3. 写出操作与读取操作一样，都是需要消耗cpu的，即使write方法写出的消息总是能一次性的成功发出，也不能让当前channel无限制的写出数据，而导致同处一个事件循环中的其它channel饥饿。
+3. 写出操作与读取操作一样，都是需要占用cpu的，即使write方法写出的消息总是能一次性的成功发出，也不能让当前channel无限制的写出数据，而导致同处一个事件循环中的其它channel饥饿。
 #####
 因此在本篇博客中，lab4版本的MyNetty需要对写出操作进行改进，优化大量数据写出时的各种问题。
 
@@ -40,13 +39,13 @@ public class EchoServerEventHandler extends MyChannelEventHandlerAdapter {
 1. 针对操作系统缓冲区有限，可能在网络拥塞等场景无法立即写出数据的问题，Netty内部为每一个Channel都设置了一个名为ChannelOutboundBuffer的应用层缓冲区。  
    通过write方法写出的消息数据，会先暂存在该缓冲区中。而只有通过flush/writeAndFlush方法触发flush操作时，才会实际的往channel的对端写出。  
    当所暂存的消息无法完全写出时，消息也不会丢失，而是会一直待在缓冲区内等待缓冲区空闲后重试写出(具体原理在后面解析)。
-2. 针对write方法异步操作而无法令用户感知结果的问题，netty的write方法返回了一个Future对象，用户可以通过注册回调方法来感知当前所写出消息的结果。  
+2. 针对write方法异步操作而无法令用户感知结果的问题，netty的write方法返回了一个类似Future的ChannelPromise对象，用户可以通过注册回调方法来感知当前所写出消息的结果。  
 3. 针对用户无法感知当前系统负载情况而无法主动限流的问题，netty引入了高水位、低水位的概念。
    当channel对应的ChannelOutboundBuffer中待写出消息总大小高于某个阈值时，被认为处于高水位，负载较高，不能继续写入了；而待写出消息的总大小低于某个阈值时，被认为处于低水位，负载较低，可以继续写入了。  
-   用户可以通过channel的isWritable主动的查询当前的负载状态(返回false代表负载较高，不可写)，也可以监听channelHandler的channelWritabilityChanged获取isWritable状态的转换结果。  
+   用户可以通过channel的isWritable方法主动的查询当前的负载状态(返回false代表负载较高，不可写)，也可以监听channelHandler的channelWritabilityChanged获取isWritable状态的转换结果。  
    基于isWritable，用户能够在负载较高时主动的调节自己发送消息的速率，避免待发送消息越写越多，最终导致OOM。
 4. 针对单个channel内待写出消息过多而可能导致同一EventLoop内其它channel饥饿的问题，与避免读事件饥饿的机制一样，netty同样限制了一次完整的写出操作内可以写出的消息次数。  
-   在写出次数超过阈值时，则立即终止当前channel的写出，转而处理其它事件/任务；当前channel内未写完的消息留待下一次事件循环中再接着处理。
+   在写出次数超过阈值时，则立即终止当前channel的写出，转而处理其它事件/任务；当前channel内未写完的消息留待后续的事件循环中再接着处理。
 ##### MyNetty ChannelOutboundBuffer实现源码
 ```java
 public class MyChannelOutboundBuffer {
@@ -509,22 +508,21 @@ public class MyNioEventLoop implements Executor {
 ```
 #####
 * MyChannelOutboundBuffer中维护了两个单向链表结构，一个是unFlushedEntry作为头结点的待刷新链表，一个是flushedEntry作为头结点的已刷新待写出的链表。通过write方法想要写出的消息都会被包装成entry节点被放在待刷新链表中。  
-  其中，所接受的消息必须是ByteBuffer类型。因此应用必须在写出操作的链路上，将自定义消息对象通过编码处理器统一转换为ByteBuffer。
+  其中，所接受的消息必须是ByteBuffer类型。因此应用必须在写出操作的链路上，最终将自定义消息对象通过编码处理器统一转换为ByteBuffer。
 * 而当flush=true且已刷新待写出链表为空时，会通过一次巧妙的引用切换，将待刷新链表中的所有节点都转换到已刷新链表中。同时flush0方法会遍历已刷新链表，将其中的数据按照顺序通过socketChannel.write向对端进行实际的写出操作。  
   如果一个节点中对应所有消息被完整的写出时，会将该节点从已刷新链表中摘除。如果因为拥塞或消息体很大无法一次完全写出，则会继续留在已刷新链表内。
-##### 退出消息写出逻辑的三种方式
-* 当前flush操作后，已刷新链表中的消息都正常的写出成功了(myChannelOutboundBuffer.isEmpty=true)。
-* 在socketChannel.write方法返回等于0，说明缓冲区拥塞已不可写，继续尝试短时间内已不太可能成功，通过向EventLoop注册可写事件的监听后结束此次处理。  
-  在下一次事件循环时，processWriteEvent中会再次执行flush0进行重试，继续消息的写出。  
-* 缓冲区一直可写，但是待写出消息数据量过大，超过了单次可允许批量写出的次数后依然无法全部写出，则向EventLoop注册一个task任务后结束处理。  
-  再后续事件循环中，该任务会被捞取出来继续重试。通过这种机制，使得同一EventLoop中的其它IO事件和task任务能够有机会被处理，避免其它channel饥饿。
 #####
 * netty中定义了低水位和高水位两个阈值。每个消息在放入缓冲区时，会计算对应链表节点所占用总大小，当缓冲区中全部链表节点所占用的总大小超过了高水位阈值时，则unWritable变为true。用户感知到该变化时，则应该避免继续写入而堆积过量消息导致OOM。    
-  而当消息随着正常的写出，被从已刷新链表中被不断删除时，所占用的总空间则会慢慢减少，当减少到低于低水位阈值时，unWritable变为false，代表有空闲，可以继续写入消息了。  
+  而当消息随着正常的写出，被从已刷新链表中被不断删除时，所占用的总空间则会慢慢减少，当减少到低于低水位阈值时，unWritable变为false，代表有空闲，可以继续写入消息了。
 * 与处理读事件一样，netty在写出时也通过启发式的算法来动态调整下一次批量写出消息的数据量。既能避免拥塞，又能用尽可能少的次数将同样大小的消息体发出。
+##### 退出消息写出逻辑的三种方式
+* 当前flush操作后，已刷新链表中的消息都正常的写出成功了(myChannelOutboundBuffer.isEmpty=true)。
+* 实际写出时，socketChannel.write方法返回等于0，说明缓冲区拥塞已不可写，继续尝试短时间内已不太可能成功，通过向EventLoop注册可写事件的监听后结束此次处理。在下一次事件循环时，processWriteEvent中会再次执行flush0进行重试，继续消息的写出。  
+* 缓冲区一直可写，但是待写出消息数据量过大，超过了单次可允许批量写出的次数后依然无法全部写出，则向EventLoop注册一个task任务后结束处理。  
+  再后续事件循环中，该任务会被捞取出来继续重试。通过这种机制，使得同一EventLoop中的其它IO事件和task任务能够有机会被处理，避免其它channel饥饿。
 
 ## 总结
-* 在lab4中，MyNetty参考netty优化了写出操作的处理逻辑，支持写出大数据量的消息。并且能够让用户感知当前channel写出消息堆积的情况和监听写出操作的结果。同时，在保留了Netty关于写操作处理最核心逻辑的同时，省略了许多旁路逻辑以减轻读者的理解负担，比如各种阈值参数的动态配置(MyNetty里都是直接写死)、未支持channelWritabilityChanged事件等等。  
+* 在lab4中，MyNetty参考netty优化了写出操作的处理逻辑，支持写出大数据量的消息，并且能够让用户感知当前channel写出消息堆积的情况和监听写出操作的结果。同时，在保留了Netty关于写操作处理最核心逻辑的同时，省略了许多旁路逻辑以减轻读者的理解负担，比如各种阈值参数的动态配置(MyNetty里都是直接写死)、未支持channelWritabilityChanged事件等等。  
 * 在这里十分推荐大佬“bin的技术小屋”的博客“[一文搞懂 Netty 发送数据全流程 | 你想知道的细节全在这里](https://www.cnblogs.com/binlovetech/p/16453634.html)”，里面对于netty写出功能分析的非常完善，相信在理解了MyNetty的lab1-lab4的内容后，读者能更好的理解大佬博客中所涉及到的netty中各模块整体的交互逻辑。
 #####
 博客中展示的完整代码在我的github上：https://github.com/1399852153/MyNetty (release/lab4_efficient_write 分支)，内容如有错误，还请多多指教。
