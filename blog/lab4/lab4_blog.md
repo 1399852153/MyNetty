@@ -368,5 +368,163 @@ class MyChannelOutBoundBufferEntry {
     }
 }
 ```
+##### EventLoop中对write事件的处理逻辑
+```java
+public class MyNioSocketChannel extends MyNioChannel{
+    // 已省略无关代码
 
+    /**
+     * 一次聚合写出的最大字节数
+     * */
+    private int maxBytesPerGatheringWrite = 1024 * 1024 * 1024;
+
+    public static final int MAX_BYTES_PER_GATHERING_WRITE_ATTEMPTED_LOW_THRESHOLD = 4096;
+
+    @Override
+    protected void doWrite(MyChannelOutboundBuffer myChannelOutboundBuffer) throws Exception {
+        // 默认一次写出16次
+        int writeSpinCount = 16;
+        do {
+            if (myChannelOutboundBuffer.isEmpty()) {
+                // 当前积压的待flush消息已经写完了，清理掉注册的write监听
+
+                // All written so clear OP_WRITE
+                clearOpWrite();
+                // Directly return here so incompleteWrite(...) is not called.
+                return;
+            }
+
+            // 计算出当前这一次写出的bytebuffer的数量
+            List<ByteBuffer> needWriteByteBufferList = myChannelOutboundBuffer.nioByteBuffers(1024,maxBytesPerGatheringWrite);
+            // 相比netty里用数组，List会多一次数组copy，但这样简单一点，不用考虑缓存or动态扩容的问题，暂不优化
+            ByteBuffer[] byteBuffers = needWriteByteBufferList.toArray(new ByteBuffer[0]);
+            SocketChannel socketChannel = this.getSocketChannel();
+
+            // 调用jdk channel的write方法一次性写入byteBuffer集合
+            final long localWrittenBytes = socketChannel.write(byteBuffers,0, needWriteByteBufferList.size());
+            logger.info("localWrittenBytes={},attemptedBytes={},needWriteByteBufferList.size={}"
+                , localWrittenBytes, myChannelOutboundBuffer.getNioBufferSize(),needWriteByteBufferList.size());
+            if (localWrittenBytes <= 0) {
+                // 返回值localWrittenBytes小于等于0，说明当前Socket缓冲区写满了，不能再写入了。注册一个OP_WRITE事件(setOpWrite=true)，
+                // 当channel所在的NIO循环中监听到当前channel的OP_WRITE事件时，就说明缓冲区又可写了，在对应逻辑里继续执行写入操作
+                incompleteWrite(true);
+                // 既然写不下了就直接返回，不需要继续尝试了
+                return;
+            }
+
+            long attemptedBytes = myChannelOutboundBuffer.getNioBufferSize();
+            // 基于本次写出的情况，动态的调整一次写出的最大字节数maxBytesPerGatheringWrite
+            adjustMaxBytesPerGatheringWrite((int) attemptedBytes, (int) localWrittenBytes, maxBytesPerGatheringWrite);
+            // 按照实际写出的字节数进行计算，将写出完毕的ByteBuffer从channelOutboundBuffer中移除掉
+            myChannelOutboundBuffer.removeBytes(localWrittenBytes);
+
+            // 每次写入一次消息，writeSpinCount自减
+            writeSpinCount--;
+        } while (writeSpinCount > 0);
+
+        // 自然的退出了循环，说明已经正确的写完了writeSpinCount指定条数的消息，但channelOutboundBuffer还不为空(如果写完了会提前return)
+        // incompleteWrite内部提交一个flush0的任务，等待到下一次事件循环中再捞出来处理，保证不同channel间读写的公平性
+        incompleteWrite(false);
+    }
+
+    private void adjustMaxBytesPerGatheringWrite(int attempted, int written, int oldMaxBytesPerGatheringWrite) {
+        // By default we track the SO_SNDBUF when ever it is explicitly set. However some OSes may dynamically change
+        // SO_SNDBUF (and other characteristics that determine how much data can be written at once) so we should try
+        // make a best effort to adjust as OS behavior changes.
+
+        // 默认情况下，我们会追踪明确设置SO_SNDBUF的地方。(setSendBufferSize等)
+        // 然而，一些操作系统可能会动态更改SO_SNDBUF（以及其他决定一次可以写入多少数据的特性），
+        // 因此我们应该尽力根据操作系统的行为变化进行调整。
+
+        if (attempted == written) {
+            // 本次操作写出的数据能够完全写出，说明操作系统当前还有余力
+            if (attempted << 1 > oldMaxBytesPerGatheringWrite) { // 左移1位，大于的判断可以保证maxBytesPerGatheringWrite不会溢出为负数
+                // 进一步判断，发现实际写出的数据比指定的maxBytesPerGatheringWrite要大一倍以上
+                // 则扩大maxBytesPerGatheringWrite的值，在后续尽可能多的写出数据
+                // 通常在maxBytesPerGatheringWrite较小，而某一个消息很大的场景下会出现(nioBuffers方法)
+                this.maxBytesPerGatheringWrite = attempted << 1;
+            }
+        } else if (attempted > MAX_BYTES_PER_GATHERING_WRITE_ATTEMPTED_LOW_THRESHOLD && written < attempted >>> 1) {
+            // 如果因为操作系统底层缓冲区不够的原因导致实际写出的数据量(written)比需要写出的数据量(attempted)低了一倍以上,可能是比较拥塞或者其它原因(配置或动态变化)
+            // 将一次写出的最大字节数缩小为原来的一半，下次尝试少发送一些消息，以提高性能
+            this.maxBytesPerGatheringWrite = attempted >>> 1;
+        }
+    }
+}
+```
+```java
+public class MyNioEventLoop implements Executor {
+    // 已省略无关代码
+   
+    private void processSelectedKeys() throws IOException {
+        // processSelectedKeysPlain
+        Iterator<SelectionKey> selectionKeyItr = unwrappedSelector.selectedKeys().iterator();
+        while (selectionKeyItr.hasNext()) {
+            SelectionKey key = selectionKeyItr.next();
+            logger.info("process SelectionKey={}",key.readyOps());
+            try {
+                // 拿出来后，要把集合中已经获取到的事件移除掉，避免重复的处理
+                selectionKeyItr.remove();
+
+                if (key.isConnectable()) {
+                    // 处理客户端连接建立相关事件
+                    processConnectEvent(key);
+                }
+
+                if (key.isAcceptable()) {
+                    // 处理服务端accept事件（接受到来自客户端的连接请求）
+                    processAcceptEvent(key);
+                }
+
+                if (key.isReadable()) {
+                    // 处理read事件
+                    processReadEvent(key);
+                }
+
+                if(key.isWritable()){
+                    // 处理OP_WRITE事件（setOpWrite中注册的）
+                    processWriteEvent(key);
+                }
+            }catch (Throwable e){
+                logger.error("server event loop process an selectionKey error!",e);
+
+                // 处理io事件有异常，取消掉监听的key，并且尝试把channel也关闭掉
+                key.cancel();
+                if(key.channel() != null){
+                    logger.error("has error, close channel={} ",key.channel());
+                    key.channel().close();
+                }
+            }
+        }
+    }
+
+    private void processWriteEvent(SelectionKey key) throws IOException {
+        // 目前所有的attachment都是MyNioChannel
+        MyNioSocketChannel myNioChannel = (MyNioSocketChannel) key.attachment();
+
+        // 执行flush0方法
+        myNioChannel.flush0();
+    }
+}
+```
 #####
+* MyChannelOutboundBuffer中维护了两个单向链表结构，一个是unFlushedEntry作为头结点的待刷新链表，一个是flushedEntry作为头结点的已刷新待写出的链表。通过write方法想要写出的消息都会被包装成entry节点被放在待刷新链表中。  
+  其中，所接受的消息必须是ByteBuffer类型。因此应用必须在写出操作的链路上，将自定义消息对象通过编码处理器统一转换为ByteBuffer。
+* 而当flush=true且已刷新待写出链表为空时，会通过一次巧妙的引用切换，将待刷新链表中的所有节点都转换到已刷新链表中。同时flush0方法会遍历已刷新链表，将其中的数据按照顺序通过socketChannel.write向对端进行实际的写出操作。  
+  如果一个节点中对应所有消息被完整的写出时，会将该节点从已刷新链表中摘除。如果因为拥塞或消息体很大无法一次完全写出，则会继续留在已刷新链表内。
+##### 退出消息写出逻辑的三种方式
+* 当前flush操作后，已刷新链表中的消息都正常的写出成功了(myChannelOutboundBuffer.isEmpty=true)。
+* 在socketChannel.write方法返回等于0，说明缓冲区拥塞已不可写，继续尝试短时间内已不太可能成功，通过向EventLoop注册可写事件的监听后结束此次处理。  
+  在下一次事件循环时，processWriteEvent中会再次执行flush0进行重试，继续消息的写出。  
+* 缓冲区一直可写，但是待写出消息数据量过大，超过了单次可允许批量写出的次数后依然无法全部写出，则向EventLoop注册一个task任务后结束处理。  
+  再后续事件循环中，该任务会被捞取出来继续重试。通过这种机制，使得同一EventLoop中的其它IO事件和task任务能够有机会被处理，避免其它channel饥饿。
+#####
+* netty中定义了低水位和高水位两个阈值。每个消息在放入缓冲区时，会计算对应链表节点所占用总大小，当缓冲区中全部链表节点所占用的总大小超过了高水位阈值时，则unWritable变为true。用户感知到该变化时，则应该避免继续写入而堆积过量消息导致OOM。    
+  而当消息随着正常的写出，被从已刷新链表中被不断删除时，所占用的总空间则会慢慢减少，当减少到低于低水位阈值时，unWritable变为false，代表有空闲，可以继续写入消息了。  
+* 与处理读事件一样，netty在写出时也通过启发式的算法来动态调整下一次批量写出消息的数据量。既能避免拥塞，又能用尽可能少的次数将同样大小的消息体发出。
+
+## 总结
+* 在lab4中，MyNetty参考netty优化了写出操作的处理逻辑，支持写出大数据量的消息。并且能够让用户感知当前channel写出消息堆积的情况和监听写出操作的结果。同时，在保留了Netty关于写操作处理最核心逻辑的同时，省略了许多旁路逻辑以减轻读者的理解负担，比如各种阈值参数的动态配置(MyNetty里都是直接写死)、未支持channelWritabilityChanged事件等等。  
+* 在这里十分推荐大佬“bin的技术小屋”的博客“[一文搞懂 Netty 发送数据全流程 | 你想知道的细节全在这里](https://www.cnblogs.com/binlovetech/p/16453634.html)”，里面对于netty写出功能分析的非常完善，相信在理解了MyNetty的lab1-lab4的内容后，读者能更好的理解大佬博客中所涉及到的netty中各模块整体的交互逻辑。
+#####
+博客中展示的完整代码在我的github上：https://github.com/1399852153/MyNetty (release/lab4_efficient_write 分支)，内容如有错误，还请多多指教。
