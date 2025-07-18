@@ -19,10 +19,11 @@
 每一部分都会有单独的分支和对应的博客（持续更新中）
 #####
 1. lab1版本分支:  release/lab1_nio_reactor   
-   博客地址：[从零开始实现简易版Netty(一) MyNetty Reactor模式](https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)
+   博客地址: [从零开始实现简易版Netty(一) MyNetty Reactor模式](https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)
 2. lab2版本分支:  release/lab2_pipeline_handle  
-   博客地址：[从零开始实现简易版Netty(二) MyNetty pipeline流水线](https://www.cnblogs.com/xiaoxiongcanguan/p/18964326)
+   博客地址: [从零开始实现简易版Netty(二) MyNetty pipeline流水线](https://www.cnblogs.com/xiaoxiongcanguan/p/18964326)
 3. lab3版本分支:  release/lab3_efficient_read  
-   博客地址：[从零开始实现简易版Netty(三) MyNetty 高效的数据读取实现](https://www.cnblogs.com/xiaoxiongcanguan/p/18979699)
-
+   博客地址: [从零开始实现简易版Netty(三) MyNetty 高效的数据读取实现](https://www.cnblogs.com/xiaoxiongcanguan/p/18979699)
+4. lab4版本分支:  release/lab4_efficient_write  
+   博客地址: [从零开始实现简易版Netty(四) MyNetty 高效的数据写出实现](https://www.cnblogs.com/xiaoxiongcanguan/p/18992091)
 
