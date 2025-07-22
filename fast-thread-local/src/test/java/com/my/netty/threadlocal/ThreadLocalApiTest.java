@@ -7,7 +7,7 @@ import com.my.netty.threadlocal.constants.PerformanceTestingConfig;
 import com.my.netty.threadlocal.impl.jdk.MyJdkThreadFactory;
 import com.my.netty.threadlocal.impl.jdk.MyJdkThreadLocal;
 import com.my.netty.threadlocal.impl.netty.MyFastThreadLocal;
-import com.my.netty.threadlocal.impl.netty.MyFastThreadLocalThreadFactory;
+import com.my.netty.threadlocal.impl.netty.MyDefaultThreadFactory;
 import com.my.netty.threadlocal.impl.simple.MySimpleThreadLocal;
 import com.my.netty.threadlocal.util.PerformanceTestingUtil;
 import org.junit.Test;
@@ -27,13 +27,13 @@ public class ThreadLocalApiTest {
     }
 
     @Test
-    public void testMyFastThreadLocal() throws Exception {
-        doTest(MyFastThreadLocal.class, new MyFastThreadLocalThreadFactory());
+    public void testJDKThreadLocal() throws Exception {
+        doTest(JDKThreadLocalAdapter.class);
     }
 
     @Test
-    public void testJDKThreadLocal() throws Exception {
-        doTest(JDKThreadLocalAdapter.class);
+    public void testMyFastThreadLocal() throws Exception {
+        doTest(MyFastThreadLocal.class, new MyDefaultThreadFactory());
     }
 
     @Test

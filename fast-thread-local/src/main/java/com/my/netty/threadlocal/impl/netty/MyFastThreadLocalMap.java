@@ -3,6 +3,9 @@ package com.my.netty.threadlocal.impl.netty;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * 类似netty的InternalThreadLocalMap
+ * */
 public class MyFastThreadLocalMap {
 
     /**
