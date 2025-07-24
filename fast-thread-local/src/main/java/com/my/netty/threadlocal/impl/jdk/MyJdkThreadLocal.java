@@ -5,6 +5,9 @@ import com.my.netty.threadlocal.api.ThreadLocalApi;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
+/**
+ * 基本参考自jdk中的ThreadLocal类
+ * */
 public class MyJdkThreadLocal<T> implements ThreadLocalApi<T> {
 
     private final int threadLocalHashCode = generateNextHashCode();

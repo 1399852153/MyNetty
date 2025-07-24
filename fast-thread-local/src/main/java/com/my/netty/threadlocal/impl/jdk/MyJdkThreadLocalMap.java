@@ -2,10 +2,12 @@ package com.my.netty.threadlocal.impl.jdk;
 
 import java.lang.ref.WeakReference;
 
+/**
+ * 基本参考自jdk中的ThreadLocal类中的ThreadLocalMap内部类
+ * */
 public class MyJdkThreadLocalMap {
 
     public static class Entry extends WeakReference<MyJdkThreadLocal<?>> {
-        /** The value associated with this ThreadLocal. */
         Object value;
 
         Entry(MyJdkThreadLocal<?> k, Object v) {
@@ -16,20 +18,10 @@ public class MyJdkThreadLocalMap {
 
     private static final int INITIAL_CAPACITY = 16;
 
-    /**
-     * The table, resized as necessary.
-     * table.length MUST always be a power of two.
-     */
     private Entry[] table;
 
-    /**
-     * The number of entries in the table.
-     */
     private int size = 0;
 
-    /**
-     * The next size value at which to resize.
-     */
     private int threshold; // Default to 0
 
     public MyJdkThreadLocalMap() {
@@ -374,6 +366,4 @@ public class MyJdkThreadLocalMap {
         // 注意：threshold和len的比例一定要小于1，因为是开放定位法，否则会导致数组装满而放不下新元素
         threshold = len * 2 / 3;
     }
-
-
 }

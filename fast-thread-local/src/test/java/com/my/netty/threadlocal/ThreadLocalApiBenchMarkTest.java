@@ -14,7 +14,7 @@ import org.junit.Test;
 
 import java.util.concurrent.ThreadFactory;
 
-public class ThreadLocalApiTest {
+public class ThreadLocalApiBenchMarkTest {
 
     @Test
     public void testMySimpleThreadLocal() throws Exception {
