@@ -65,13 +65,15 @@ public class MyNioEventLoop implements Executor {
             // 尝试启动当前eventLoop对应的线程(cas防并发，避免重复启动新线程)
             if(threadStartedFlag.compareAndSet(false,true)){
                 // 类似netty的ThreadPerTaskExecutor,启动一个线程来执行事件循环
-                new Thread(()->{
+                // 使用自定义的Thread，能够更好的使用FastThreadLocal
+                Thread newThread = this.defaultChannelConfig.getDefaultThreadFactory().newThread(()->{
                     // 将eventLoop的thread与新启动的这个thread进行绑定
                     this.thread = Thread.currentThread();
 
                     // 执行监听selector的事件循环
                     doEventLoop();
-                }).start();
+                });
+                newThread.start();
             }
         }
 

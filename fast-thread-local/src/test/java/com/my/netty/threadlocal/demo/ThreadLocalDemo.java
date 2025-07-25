@@ -1,5 +1,7 @@
 package com.my.netty.threadlocal.demo;
 
+import java.util.concurrent.locks.LockSupport;
+
 public class ThreadLocalDemo {
 
     private static ThreadLocal<String> threadLocal = new ThreadLocal<>();
@@ -24,6 +26,8 @@ public class ThreadLocalDemo {
                 System.out.println("t2线程局部变量的value : " + threadLocal.get()  + " " + Thread.currentThread().getName());
             }
         }, "t2").start();
+
+        LockSupport.park();
     }
 
     private static void doSleep(){

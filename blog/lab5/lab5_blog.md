@@ -33,6 +33,8 @@ public class ThreadLocalDemo {
                 //获取t1线程中本地变量的值
                 System.out.println("t2线程局部变量的value : " + threadLocal.get()  + " " + Thread.currentThread().getName());
             }}, "t2").start();
+        
+        LockSupport.park();
     }
 
     private static void doSleep(){
@@ -45,7 +47,7 @@ public class ThreadLocalDemo {
 }
 ```
 #####
-基于这个特性，ThreadLocal很适合用于存储线程级别隔离的，跨方法调用的变量。比如BIO模式下当前请求的用户上下文信息，或者jdbc中的数据库连接Connection等。 
+基于这个特性，ThreadLocal很适合用于存储线程级别隔离的，跨方法调用的变量。比如BIO模式下当前请求的用户上下文信息，或是数据库连接Connection来管理事务等。 
 
 ## 2. ThreadLocal工作原理解析
 ThreadLocal的使用非常简单，其仅提供了get、set和remove三个方法让用户实现增删改查功能。为了方便后续的测试，我们这里定义一个ThreadLocal的Api，便于验证不同ThreadLocal实现的差异。
@@ -61,6 +63,24 @@ public interface ThreadLocalApi<T> {
 ```
 #####
 掌握ThreadLocal使用，但对ThreadLocal底层不了解的读者可能会简单的认为ThreadLocal底层是一个ConcurrentHashMap，key是当前线程，value是对应存储的ThreadLocal变量。类似下面这样的实现。
+```java
+public class MyJdkThread extends Thread {
+
+    private MyJdkThreadLocalMap myJdkThreadLocalMap;
+
+    public MyJdkThread(Runnable target) {
+        super(target);
+    }
+
+    public MyJdkThreadLocalMap getMyJdkThreadLocalMap() {
+        return myJdkThreadLocalMap;
+    }
+
+    public void setMyJdkThreadLocalMap(MyJdkThreadLocalMap myJdkThreadLocalMap) {
+        this.myJdkThreadLocalMap = myJdkThreadLocalMap;
+    }
+}
+```
 ```java
 public class MySimpleThreadLocal<T> implements ThreadLocalApi<T> {
 
@@ -707,6 +727,401 @@ public class WeakReferenceDemo {
 个人认为，主要原因有二:
 1. 开发地址法相比拉链法因为不需要维护链表节点，因此更加节约空间。但在哈希表很大时，hash冲突时寻找可用slot的cpu开销较大。  
    但相比普通HashMap的使用场景，ThreadLocalMap中会维护的Entry数量不会特别多，所以带来的额外的哈希冲突时的开销不是什么大问题。
-2. 比起依赖链表的拉链法，基于弱引用进行Entry自动回收的机制也能更简单、高效的实现。
+2. 比起依赖链表的拉链法，基于弱引用进行Entry自动回收的机制能更简单、高效的实现。
 
 ## 2. FastThreadLocal实现原理介绍
+在第一节中，详细的分析了jdk的ThreadLocal的工作原理，似乎ThreadLocal已经足够高效和可靠了。那么netty为什么还要再造一个功能类似的FastThreadLocal呢？特别是还冠以了Fast的名字，FastThreadLocal究竟比ThreadLocal快在哪？  
+### FastThreadLocal比ThreadLocal快在哪？
+1. ThreadLocal中key是基于ThreadLocal对象的hash码得出的，hash码本质上是随机的，因此不同ThreadLocal对象其对应的slot插槽必然有概率相同而可能产生hash冲突。  
+   而Netty中的FastThreadLocal的key并不是基于hash码，而是一个并发安全且全局单调递增的整数。每一个ThreadLocal对象被创建时都会基于这个自增整数(nextIndex)获得一个全局唯一的整数值(index)，并作为在FastThreadLocalMap中底层数组的下标索引值。    **因此FastThreadLocal不会出现hash冲突的问题，比起jdk的ThreadLocal大幅减少了冲突时遍历寻找空闲插槽的额外开销。**
+2. 上文提到，jdk的作者在设计ThreadLocal时，考虑到用户无法总是正确的remove回收掉ThreadLocal，因此实现了一套启发式的自动清理无效Entry的机制。  
+   而Netty中，创造FastThreadLocal的核心目的是提升netty自身使用ThreadLocal的场景时的效率。netty的作者能保证FastThreadLocal一定能在不使用时被remove掉，不存在内存泄露的风险，不需要额外的自动清理机制来兜底。  
+   **相比ThreadLocal，减少了启发式检查自动回收机制的FastThreadLocal毫无疑问在get、set和remove时性能有较大提升。**
+##### MyFastThreadLocal实现源码(完全参考netty，但做了一定的简化)
+```java
+public class MyFastThreadLocal<V> implements ThreadLocalApi<V> {
+
+    private static final int variablesToRemoveIndex = 0;
+
+    /**
+     * threadLocal对象在线程对应的ThreadLocalMap的下标(构造函数中，对象初始化的时候就确定了)
+     * */
+    private final int index;
+
+    public MyFastThreadLocal() {
+        // 原子性自增，确保每一个FastThreadLocal对象都有独一无二的下标
+        index = MyFastThreadLocalMap.nextVariableIndex();
+    }
+
+    /**
+     * 删除与当前线程绑定的所有ThreadLocal对象
+     * */
+    @SuppressWarnings("unchecked")
+    public static void removeAll() {
+        // 获得与当前Thread绑定的ThreadLocalMap
+        MyFastThreadLocalMap threadLocalMap = MyFastThreadLocalMap.getIfSet();
+        if (threadLocalMap == null) {
+            // 没有初始化过，无事发生
+            return;
+        }
+
+        try {
+            Object v = threadLocalMap.indexedVariable(variablesToRemoveIndex);
+            if (v != null && v != MyFastThreadLocalMap.UNSET) {
+                // ThreadLocalMap数组中下标为0的地方，固定放线程所属的全体FastThreadLocal集合
+                Set<MyFastThreadLocal<?>> variablesToRemove = (Set<MyFastThreadLocal<?>>) v;
+                MyFastThreadLocal<?>[] variablesToRemoveArray = variablesToRemove.toArray(new MyFastThreadLocal[0]);
+                for (MyFastThreadLocal<?> tlv: variablesToRemoveArray) {
+                    tlv.remove(threadLocalMap);
+                }
+            }
+        } finally {
+            MyFastThreadLocalMap.remove();
+        }
+    }
+
+    @Override
+    public void remove() {
+        MyFastThreadLocalMap myFastThreadLocalMap = MyFastThreadLocalMap.getIfSet();
+        remove(myFastThreadLocalMap);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void remove(MyFastThreadLocalMap threadLocalMap) {
+        if (threadLocalMap == null) {
+            return;
+        }
+
+        // 从ThreadLocalMap中删除
+        Object v = threadLocalMap.removeIndexedVariable(index);
+        removeFromVariablesToRemove(threadLocalMap, this);
+
+        if (v != MyFastThreadLocalMap.UNSET) {
+            try {
+                // threadLocal被删除时，供业务在子类中自定义的回调函数
+                onRemoval((V) v);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public final V get() {
+        // 获得当前线程所对应的threadLocalMap
+        MyFastThreadLocalMap threadLocalMap = MyFastThreadLocalMap.get();
+
+        // 基于index，以O(1)的效率精确的获得对应的threadLocalMap中的元素
+        Object v = threadLocalMap.indexedVariable(index);
+        if (v != MyFastThreadLocalMap.UNSET) {
+            // 不为null，返回
+            return (V) v;
+        }
+
+        // 为null，返回初始化的值
+        return initialize(threadLocalMap);
+    }
+
+    @Override
+    public final void set(V value) {
+        if (value != MyFastThreadLocalMap.UNSET) {
+            // 正常set值
+            MyFastThreadLocalMap threadLocalMap = MyFastThreadLocalMap.get();
+            if (threadLocalMap.setIndexedVariable(index, value)) {
+                // 如果之前的值是UNSET，把这个新的threadLocal加入到总的待删除集合中去
+                addToVariablesToRemove(threadLocalMap, this);
+            }
+        } else {
+            // 传的是UNSET逻辑上等于remove
+            remove(MyFastThreadLocalMap.getIfSet());
+        }
+    }
+
+    private V initialize(MyFastThreadLocalMap threadLocalMap) {
+        // 获得默认初始化的值(与jdk的ThreadLocal一样，可以通过子类来重写initialValue)
+        V v = initialValue();
+
+        threadLocalMap.setIndexedVariable(index, v);
+        addToVariablesToRemove(threadLocalMap, this);
+        return v;
+    }
+
+    protected V initialValue(){
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void removeFromVariablesToRemove(MyFastThreadLocalMap threadLocalMap, MyFastThreadLocal<?> variable) {
+        Object v = threadLocalMap.indexedVariable(variablesToRemoveIndex);
+
+        if (v == MyFastThreadLocalMap.UNSET || v == null) {
+            return;
+        }
+
+        // 从FastThreadLocalMap数组起始处的Set中也移除掉FastThreadLocal变量
+        Set<MyFastThreadLocal<?>> variablesToRemove = (Set<MyFastThreadLocal<?>>) v;
+        variablesToRemove.remove(variable);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void addToVariablesToRemove(MyFastThreadLocalMap threadLocalMap, MyFastThreadLocal<?> variable) {
+        // 获得threadLocal对象集合
+        Object v = threadLocalMap.indexedVariable(variablesToRemoveIndex);
+        Set<MyFastThreadLocal<?>> variablesToRemove;
+        if (v == MyFastThreadLocalMap.UNSET || v == null) {
+            // 为null还未初始化，创建一个集合然后放到variablesToRemoveIndex位置上
+            variablesToRemove = Collections.newSetFromMap(new IdentityHashMap<>());
+            threadLocalMap.setIndexedVariable(variablesToRemoveIndex, variablesToRemove);
+        } else {
+            variablesToRemove = (Set<MyFastThreadLocal<?>>) v;
+        }
+
+        // 将threadLocal变量加入到集合汇总
+        variablesToRemove.add(variable);
+    }
+
+    /**
+     * threadLocal被删除时，供业务自定义的回调函数
+     * */
+    protected void onRemoval(@SuppressWarnings("UnusedParameters") V value) throws Exception { }
+}
+```
+```java
+/**
+ * 类似netty的InternalThreadLocalMap
+ * */
+public class MyFastThreadLocalMap {
+
+    /**
+     * 从1开始，0是特殊的位置
+     * */
+    private static final AtomicInteger nextIndex = new AtomicInteger(1);
+
+    private static final int INDEXED_VARIABLE_TABLE_INITIAL_SIZE = 32;
+
+    private Object[] indexedVariables;
+
+    private static final ThreadLocal<MyFastThreadLocalMap> slowThreadLocalMap = new ThreadLocal<>();
+
+    private static final int ARRAY_LIST_CAPACITY_EXPAND_THRESHOLD = 1 << 30;
+
+    /**
+     * 等价于null的一个全局对象
+     * */
+    public static final Object UNSET = new Object();
+
+    // Reference: https://hg.openjdk.java.net/jdk8/jdk8/jdk/file/tip/src/share/classes/java/util/ArrayList.java#l229
+    private static final int ARRAY_LIST_CAPACITY_MAX_SIZE = Integer.MAX_VALUE - 8;
+
+    public MyFastThreadLocalMap() {
+        // 初始化内部数组
+        this.indexedVariables = newIndexedVariableTable();
+    }
+
+    private static Object[] newIndexedVariableTable() {
+        Object[] array = new Object[INDEXED_VARIABLE_TABLE_INITIAL_SIZE];
+        Arrays.fill(array, UNSET);
+        return array;
+    }
+
+    public static int nextVariableIndex() {
+        int index = nextIndex.getAndIncrement();
+        if (index >= ARRAY_LIST_CAPACITY_MAX_SIZE || index < 0) {
+            nextIndex.set(ARRAY_LIST_CAPACITY_MAX_SIZE);
+            throw new IllegalStateException("too many thread-local indexed variables");
+        }
+        return index;
+    }
+
+    public static MyFastThreadLocalMap getIfSet() {
+        Thread thread = Thread.currentThread();
+        if (thread instanceof MyFastThreadLocalThread) {
+            return ((MyFastThreadLocalThread) thread).getMyFastThreadLocalMap();
+        }else{
+            return slowThreadLocalMap.get();
+        }
+    }
+
+    public static void remove() {
+        Thread thread = Thread.currentThread();
+        if (thread instanceof MyFastThreadLocalThread) {
+            // 清理掉thread的这个map设置为null
+            ((MyFastThreadLocalThread) thread).setMyFastThreadLocalMap(null);
+        } else {
+            slowThreadLocalMap.remove();
+        }
+    }
+
+    public static MyFastThreadLocalMap get() {
+        Thread thread = Thread.currentThread();
+        if (thread instanceof MyFastThreadLocalThread) {
+            // 如果当前线程是FastThreadLocalThread，直接获取对应的MyFastThreadLocalMap
+            MyFastThreadLocalThread myFastThreadLocalThread = (MyFastThreadLocalThread) thread;
+            MyFastThreadLocalMap threadLocalMap = myFastThreadLocalThread.getMyFastThreadLocalMap();
+            if (threadLocalMap == null) {
+                // 没有就初始化一个空的，然后与当前线程绑定一下
+                myFastThreadLocalThread.setMyFastThreadLocalMap(threadLocalMap = new MyFastThreadLocalMap());
+            }
+            return threadLocalMap;
+        } else {
+            // 如果当前线程不是FastThreadLocalThread，降级从slowThreadLocalMap中获取
+            MyFastThreadLocalMap ret = slowThreadLocalMap.get();
+            if (ret == null) {
+                // 没有就初始化一个空的，然后与当前线程绑定一下
+                ret = new MyFastThreadLocalMap();
+                slowThreadLocalMap.set(ret);
+            }
+            return ret;
+        }
+    }
+
+    public Object indexedVariable(int index) {
+        Object[] lookup = indexedVariables;
+        // 判断有没有越界，越界了返回UNSET
+        return index < lookup.length? lookup[index] : UNSET;
+    }
+
+    /**
+     * 将value放到index对应的位置上去
+     * */
+    public boolean setIndexedVariable(int index, Object value) {
+        Object[] lookup = indexedVariables;
+        if (index < lookup.length) {
+            // 简单的将value放入index处
+            Object oldValue = lookup[index];
+            lookup[index] = value;
+            return oldValue == UNSET;
+        } else {
+            // 发现index超过了当前数组的大小，进行扩容。然后将value放入index处
+            expandIndexedVariableTableAndSet(index, value);
+            return true;
+        }
+    }
+
+    /**
+     * 数组扩容，并且将value放入index下标处
+     * */
+    private void expandIndexedVariableTableAndSet(int index, Object value) {
+        Object[] oldArray = indexedVariables;
+        final int oldCapacity = oldArray.length;
+        int newCapacity;
+        if (index < ARRAY_LIST_CAPACITY_EXPAND_THRESHOLD) {
+            // 类似jdk HashMap的扩容方法(tableSizeFor)
+            // 以index为基础进行扩容,将newCapacity设置为比恰好index大的，为2次幂的数(如果index已经是2次幂的数，则newCapacity会扩容两倍)
+            newCapacity = index;
+            newCapacity |= newCapacity >>>  1;
+            newCapacity |= newCapacity >>>  2;
+            newCapacity |= newCapacity >>>  4;
+            newCapacity |= newCapacity >>>  8;
+            newCapacity |= newCapacity >>> 16;
+            newCapacity ++;
+        } else {
+            newCapacity = ARRAY_LIST_CAPACITY_MAX_SIZE;
+        }
+
+        // 类似jdk的ArrayList，将内部数组扩容(老数组的数据copy到新数组里)
+        Object[] newArray = Arrays.copyOf(oldArray, newCapacity);
+        Arrays.fill(newArray, oldCapacity, newArray.length, UNSET);
+        newArray[index] = value;
+
+        // 内部数组指向扩容后的新数组
+        indexedVariables = newArray;
+    }
+
+    public Object removeIndexedVariable(int index) {
+        Object[] lookup = indexedVariables;
+        if (index < lookup.length) {
+            // 将对应下标标识为UNSET就算删除了
+            Object v = lookup[index];
+            lookup[index] = UNSET;
+            return v;
+        } else {
+            return UNSET;
+        }
+    }
+}
+```
+```java
+public class MyFastThreadLocalRunnable implements Runnable {
+
+    private final Runnable runnable;
+
+    private MyFastThreadLocalRunnable(Runnable runnable) {
+        this.runnable = runnable;
+    }
+
+    public void run() {
+        try {
+            this.runnable.run();
+        } finally {
+            MyFastThreadLocal.removeAll();
+        }
+
+    }
+
+    static Runnable wrap(Runnable runnable) {
+        if(runnable instanceof MyFastThreadLocalRunnable) {
+            // 如果已经是MyFastThreadLocalRunnable包装类，直接返回原始对象
+            return runnable;
+        }else{
+            // 否则返回包装后的MyFastThreadLocalRunnable
+            return new MyFastThreadLocalRunnable(runnable);
+        }
+    }
+}
+```
+```java
+public class MyFastThreadLocalThread extends Thread{
+
+    /**
+     * 和jdk一样，thread对应的ThreadLocalMap也是惰性初始化的，目的是节约内存
+     * */
+    private MyFastThreadLocalMap myFastThreadLocalMap;
+
+    public MyFastThreadLocalThread(Runnable target) {
+        super(MyFastThreadLocalRunnable.wrap(target));
+    }
+
+    public MyFastThreadLocalMap getMyFastThreadLocalMap() {
+        return myFastThreadLocalMap;
+    }
+
+    public void setMyFastThreadLocalMap(MyFastThreadLocalMap myFastThreadLocalMap) {
+        this.myFastThreadLocalMap = myFastThreadLocalMap;
+    }
+}
+```
+```java
+public class MyDefaultThreadFactory implements ThreadFactory {
+
+    @Override
+    public Thread newThread(Runnable r) {
+        return new MyFastThreadLocalThread(r);
+    }
+}
+```
+#####
+* 前面我们提到，netty也是通过Thread中包含的ThreadLocalMap来维护FastThreadLocal变量集合的。Netty做为一个三方的库，不可能去直接修改拓展jdk中Thread的实现，只能通过子类Thread的方式，在子类Thread(FastThreadLocalThread)维护FastThreadLocal自己的ThreadLocalMap。这就导致了一个问题，如果非自定义的FastThreadLocalThread线程也使用FastThreadLocal的话，将会无法访问到对应的ThreadLocalMap。在第一节的MyJdkThreadLocal中，我们简单起见直接不允许非自定义的MyJdkThread的线程使用，否则直接抛异常。  
+  Netty作为一个使用广泛的框架，不可能如此粗暴，而是通过为每一个FastThreadLocal变量都内置了一个jdk的ThreadLocal(slowThreadLocalMap)的方式做了降级兼容处理。Netty也通过提供自定义的ThreadFactory(DefaultThreadFactory)和MyFastThreadLocalRunnable来进行包装，方便想要使用FastThreadLocal的用户不用降级兼容，享受到FastThreadLocal的高性能。
+* 每个FastThreadLocalThread都对应一个FastThreadLocalMap(InternalThreadLocalMap),每个FastThreadLocal变量在初始化时都拥有一个独一无二index下标号，访问时通过该独特的下标号获得保存在FastThreadLocalMap中对应的变量值(indexedVariable)。
+  扩容时，与jdk的ThreadLocal不同，FastThreadLocal在空间不足时不是直接以2次幂扩容，而是基于index做渐进的保守扩容来节约空间(expandIndexedVariableTableAndSet方法)。
+* FastThreadLocalMap的第0个位置，是一个特殊的位置，里面存放的Set集合维护了当前线程所有使用到的ThreadLocal变量。这个Set集合在当前线程退出时，能够帮助Netty快速的将当前线程所有未被remove掉的ThreadLocal变量以及其value清除掉(O(1)复杂度)。  
+#####
+有心的读者这里肯定会有疑问，为什么要单独维护一个Set集合，线程退出RemoveAll时直接遍历整个底层数组，将不为Null(不为UNSET)的处理一遍不就行了吗，一个线程持有的FastThreadLocal数量应该不多，处理起来很快才对吧？这个问题，我们留到下文解答。
+### FastThreadLocal这么强大，那有没有缺点呢?
+通过前面的介绍以及源码讲解，部分读者似乎会认为Netty中FastThreadLocal基于自增唯一整数做索引的机制比起会导致hash冲突的jdk ThreadLocal更加高级，甚至会质疑为什么jdk不参考netty修改它的ThreadLocal实现机制。  
+* 从FastThreadLocal的设计中可以发现有两个似乎较为费解的机制，一是单独在第0个位置维护了一个本线程正在使用的所有ThreadLocal集合用于线程退出时快速定位，二是扩容时底层数组的容量被设置的较为保守(不是像普通的哈希表一样直接2次幂扩容)。  
+  **而这一切其实指向了一个根本的原因，即FastThreadLocal的作者能够预判到FastThreadLocal的底层数组可能会非常大。**  
+  非常大的底层数组场景下，通过预先维护的Set集合可以在O(1)而不是O(n)的时间复杂度下回收ThreadLocal，同时保守的扩容方式能很好的节约空间。
+* 举个较为极端的例子，假设线程a在自己的业务逻辑中创建了10w个FastThreadLocal对象，此时FastThreadLocal中全局唯一的整数索引值变成了10W。  
+  此时，另一个线程b也创建了一个FastThreadLocal对象，那么线程b其独有的FastThreadLocalMap的容量是多少呢？答案是有点反直觉的10w+，而不是默认的初始化值32。  
+  可以看到，当FastThreadLocal在不同线程中没有很好的被共享使用，而是每个线程自己用自己的ThreadLocal对象，那么FastThreadLocalMap的底层数组可能会变得非常大，非常的浪费空间，在线程数较多时这一问题尤为严重。因为其它的线程虽然没有用到别的线程其独自使用的FastThreadLocal，但还必须在底层数组中为其维护对应索引下标的slot。而jdk的ThreadLocal就不会有这个问题，因为每个ThreadLocalMap的容量只取决于当前线程实际维护的ThreadLocal变量数。
+* **所以从本质上来说，FastThreadLocal的设计是一种空间换时间的策略，当FastThreadLocal在不同线程间共享率较低时，空间效率会非常低。**  
+  在Netty自身的使用中，FastThreadLocal数量很少，线程间的FastThreadLocal共享率非常高，所以空间浪费率极低，但由于没有hash冲突所以性能却好很多。而Netty自身之外使用FastThreadLocal的用户，Netty作者也乐观的假设其对底层有一定的理解，不会滥用FastThreadLocal而浪费大量空间。  
+  而jdk的ThreadLocal使用上则可能鱼龙混杂，不同业务方使用的ThreadLocal各不相同，不同业务方的线程都维护自己独有的ThreadLocal。如果使用Netty的这种实现方案，由于线程间ThreadLocal共享率很低，其带来的性能提升完全不足以弥补空间上的浪费。这也是jdk不采用唯一索引下标解决hash冲突的根本原因。
+## 总结
+* 在本篇博客中，我们介绍了jdk的ThreadLocal工作原理，并以此为对照分析了Netty中FastThreadLocal的工作原理。两者在设计上有很多相似之处，但在很多核心机制中又有很大不同而带来了各自的优缺点。  
+  我们会发现，两者采用的不同机制并不绝对的高下之分，jdk和Netty在实现线程本地变量的功能上，都采取了更适合自身所要面对业务场景的方案。
+#####
+博客中展示的完整代码在我的github上：https://github.com/1399852153/MyNetty (release/lab5_fast_thread_local 分支)，内容如有错误，还请多多指教。
