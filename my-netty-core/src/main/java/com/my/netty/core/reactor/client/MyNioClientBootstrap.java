@@ -79,13 +79,7 @@ public class MyNioClientBootstrap {
     }
 
     public void sendMessage(String msg) {
-        // 发送消息
-        ByteBuffer writeBuffer = ByteBuffer.allocate(512);
-        writeBuffer.put(msg.getBytes(StandardCharsets.UTF_8));
-        writeBuffer.flip();
-        // 写完了，flip供后续去读取
-
+        // 发送消息, 由encode编码器去编码为byteBuf
         myNioSocketChannel.getChannelPipeline().write(msg,true);
-
     }
 }

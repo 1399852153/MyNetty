@@ -3,7 +3,6 @@ package com.my.netty.core.reactor.channel.buffer;
 import com.my.netty.bytebuffer.netty.MyByteBuf;
 import com.my.netty.core.reactor.channel.MyNioChannel;
 
-import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
 
 class MyChannelOutBoundBufferEntry {
