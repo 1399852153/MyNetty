@@ -80,6 +80,10 @@ public abstract class MyByteBuf implements MyReferenceCounted{
 
     public abstract int readBytes(GatheringByteChannel out, int length) throws IOException;
 
+    public abstract MyByteBuf readBytes(byte[] dst);
+
+    public abstract MyByteBuf readBytes(byte[] dst, int dstIndex, int length);
+
     public abstract MyByteBuf readBytes(MyByteBuf dst);
 
     public abstract int getBytes(int index, GatheringByteChannel out, int length) throws IOException;

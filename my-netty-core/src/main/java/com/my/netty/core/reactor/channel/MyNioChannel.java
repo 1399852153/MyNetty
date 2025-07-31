@@ -1,6 +1,8 @@
 package com.my.netty.core.reactor.channel;
 
+import com.my.netty.bytebuffer.netty.MyByteBuf;
 import com.my.netty.core.reactor.channel.buffer.MyChannelOutboundBuffer;
+import com.my.netty.core.reactor.config.DefaultChannelConfig;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoop;
 import com.my.netty.core.reactor.exception.MyNettyException;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
@@ -32,16 +34,21 @@ public abstract class MyNioChannel {
 
     private MyChannelOutboundBuffer myChannelOutboundBuffer;
 
+    protected DefaultChannelConfig defaultChannelConfig;
+
     public MyNioChannel(Selector selector,
                         SelectableChannel javaChannel,
-                        MyChannelPipelineSupplier channelPipelineSupplier) {
+                        MyChannelPipelineSupplier channelPipelineSupplier,
+                        DefaultChannelConfig defaultChannelConfig) {
 
         this.selector = selector;
         this.javaChannel = javaChannel;
         this.channelPipeline = channelPipelineSupplier.buildMyChannelPipeline(this);
         this.myChannelOutboundBuffer = new MyChannelOutboundBuffer(this);
+        this.defaultChannelConfig = defaultChannelConfig;
 
         AssertUtil.notNull(this.channelPipeline,"channelPipeline is null");
+        AssertUtil.notNull(this.defaultChannelConfig,"defaultChannelConfig is null");
 
         try {
             // nio，非阻塞
@@ -58,17 +65,17 @@ public abstract class MyNioChannel {
     }
 
     public void doWrite(Object msg, boolean doFlush, CompletableFuture<MyNioChannel> completableFuture) throws IOException {
-        if(!(msg instanceof ByteBuffer)){
-            // 约定好，msg走到head节点的时候，只支持ByteBuffer类型
+        if(!(msg instanceof MyByteBuf)){
+            // 约定好，msg走到head节点的时候，只支持MyByteBuf类型
             throw new Error();
         }
 
-        ByteBuffer byteBufferMsg = (ByteBuffer)msg;
+        MyByteBuf byteBufferMsg = (MyByteBuf)msg;
 
         MyChannelOutboundBuffer myChannelOutboundBuffer = this.myChannelOutboundBuffer;
         // netty在存入outBoundBuffer时使用的是堆外内存缓冲，避免积压过多的数据造成堆内存移除
         // 这里简单起见先不考虑这方面的性能优化，重点关注ChannelOutboundBuffer本身的功能实现
-        myChannelOutboundBuffer.addMessage(byteBufferMsg,byteBufferMsg.limit(),completableFuture);
+        myChannelOutboundBuffer.addMessage(byteBufferMsg,byteBufferMsg.readableBytes(),completableFuture);
 
         if(doFlush){
             myChannelOutboundBuffer.addFlush();
@@ -139,6 +146,10 @@ public abstract class MyNioChannel {
     public boolean isWritable() {
         MyChannelOutboundBuffer buf = this.myChannelOutboundBuffer;
         return buf != null && buf.isWritable();
+    }
+
+    public DefaultChannelConfig config() {
+        return defaultChannelConfig;
     }
 
     protected abstract void doWrite(MyChannelOutboundBuffer channelOutboundBuffer) throws Exception;

@@ -1,6 +1,8 @@
 package com.my.netty.core.reactor.channel.buffer;
 
+import com.my.netty.bytebuffer.netty.MyByteBuf;
 import com.my.netty.core.reactor.channel.MyNioChannel;
+import com.my.netty.core.reactor.util.MyReferenceCountUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,7 +54,7 @@ public class MyChannelOutboundBuffer {
         this.channel = channel;
     }
 
-    public void addMessage(ByteBuffer msg, int size, CompletableFuture<MyNioChannel> completableFuture) {
+    public void addMessage(MyByteBuf msg, int size, CompletableFuture<MyNioChannel> completableFuture) {
         // 每个msg对应一个链表中的entry对象
         MyChannelOutBoundBufferEntry entry = MyChannelOutBoundBufferEntry.newInstance(msg, size, completableFuture);
         if (tailEntry == null) {
@@ -121,17 +123,23 @@ public class MyChannelOutboundBuffer {
                 return;
             }
 
-            final int readableBytes = currentEntry.msg.remaining();
+            final MyByteBuf buf = currentEntry.msg;
+            final int readerIndex = buf.readerIndex();
+            final int readableBytes = buf.writerIndex() - readerIndex;
 
-            if (readableBytes == 0) {
-                // 总共写出的bytes自减掉对应消息的大小
-                totalWrittenBytes -= currentEntry.msgSize;
-
-                // 完整的写出了一个byteBuffer，将其移除掉
+            if (readableBytes <= totalWrittenBytes) {
+                if (totalWrittenBytes != 0) {
+                    // 总共写出的bytes自减掉当前已经写出的字节数
+                    totalWrittenBytes -= readableBytes;
+                }
+                // 完整的写出了一个ByteBuf，将其移除掉
                 remove();
             } else {
                 // readableBytes > writtenBytes
-                // 发现一个未写完的ByteBuffer，不能移除，退出本次处理。等待下一次继续写出
+                // 发现一个未写完的ByteBuf，不能移除，退出本次处理。等待下一次继续写出
+                if (totalWrittenBytes != 0) {
+                    buf.readerIndex(readerIndex + (int) totalWrittenBytes);
+                }
                 return;
             }
         }
@@ -155,6 +163,9 @@ public class MyChannelOutboundBuffer {
 
         if (!entry.cancelled) {
             // only release message, notify and decrement if it was not canceled before.
+
+            // 传输完毕，当前所使用的byteBuf需要回收掉，避免内存泄露
+            MyReferenceCountUtil.safeRelease(entry.msg);
 
             // 写入操作flush成功，通知future
             try {
@@ -182,8 +193,9 @@ public class MyChannelOutboundBuffer {
         while (isFlushedEntry(entry)){
             // 只处理未cancel的节点
             if(!entry.cancelled) {
-                // 和netty不同，这里直接msg就是jdk的ByteBuffer，直接操作msg即可，不需要转换
-                int readableBytes = entry.msg.remaining();
+                MyByteBuf buf = entry.msg;
+                final int readerIndex = buf.readerIndex();
+                final int readableBytes = buf.writerIndex() - readerIndex;
                 // 只处理可读的消息，空msg忽略掉
                 if (readableBytes > 0) {
                     // 判断一下是否需要将当前的msg进行写出，如果超出了maxBytes就留到下一次再处理
@@ -198,7 +210,7 @@ public class MyChannelOutboundBuffer {
                     totalNioBufferSize += readableBytes;
 
                     // 当前msg加入待写出的list中
-                    needWriteByteBufferList.add(entry.msg);
+                    needWriteByteBufferList.add(entry.msg.internalNioBuffer(readerIndex, readableBytes));
 
                     if (needWriteByteBufferList.size() >= maxCount) {
                         // 限制一下一次写出最大的msg数量

@@ -292,6 +292,20 @@ public abstract class MyAbstractByteBuf extends MyByteBuf {
         return this;
     }
 
+    @Override
+    public MyByteBuf readBytes(byte[] dst) {
+        readBytes(dst, 0, dst.length);
+        return this;
+    }
+
+    @Override
+    public MyByteBuf readBytes(byte[] dst, int dstIndex, int length) {
+        checkReadableBytes0(length);
+        getBytes(readerIndex, dst, dstIndex, length);
+        readerIndex += length;
+        return this;
+    }
+
     private MyByteBuf readBytes(MyByteBuf dst, int length) {
         readBytes(dst, dst.writerIndex(), length);
         dst.writerIndex(dst.writerIndex() + length);

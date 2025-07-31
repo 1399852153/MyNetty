@@ -1,5 +1,6 @@
 package com.my.netty.core.reactor.codec;
 
+import com.my.netty.bytebuffer.netty.MyByteBuf;
 import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.handler.MyChannelEventHandlerAdapter;
 import com.my.netty.core.reactor.handler.context.MyChannelHandlerContext;
@@ -20,13 +21,12 @@ public class EchoMessageEncoder extends MyChannelEventHandlerAdapter {
         String message = (String) msg;
 
         byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
-        ByteBuffer writeBuffer = ByteBuffer.allocateDirect(bytes.length);
-        writeBuffer.put(bytes);
-        writeBuffer.flip();
+        MyByteBuf myByteBuf = ctx.alloc().heapBuffer(bytes.length);
+        myByteBuf.writeBytes(bytes);
 
         logger.info("EchoMessageEncoder message to byteBuffer, " +
-            "message={}, writeBuffer={}",message.length(),writeBuffer);
+            "message={}, myByteBuf={}",message.length(),myByteBuf);
 
-        ctx.write(writeBuffer,doFlush,completableFuture);
+        ctx.write(myByteBuf,doFlush,completableFuture);
     }
 }

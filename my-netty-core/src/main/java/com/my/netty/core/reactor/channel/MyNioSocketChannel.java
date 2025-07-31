@@ -1,6 +1,8 @@
 package com.my.netty.core.reactor.channel;
 
 
+import com.my.netty.bytebuffer.netty.MyByteBuf;
+import com.my.netty.bytebuffer.netty.allocator.MyByteBufAllocator;
 import com.my.netty.core.reactor.channel.buffer.MyChannelOutboundBuffer;
 import com.my.netty.core.reactor.config.DefaultChannelConfig;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
@@ -32,7 +34,7 @@ public class MyNioSocketChannel extends MyNioChannel{
     public MyNioSocketChannel(
         Selector selector, SocketChannel socketChannel, MyChannelPipelineSupplier myChannelPipelineSupplier,
         DefaultChannelConfig defaultChannelConfig) {
-        super(selector,socketChannel,myChannelPipelineSupplier);
+        super(selector,socketChannel,myChannelPipelineSupplier,defaultChannelConfig);
 
         this.socketChannel = socketChannel;
 
@@ -55,11 +57,12 @@ public class MyNioSocketChannel extends MyNioChannel{
         receivedMessageBytesLimiter.reset();
         do {
             int receiveBufferSize = receivedMessageBytesLimiter.getReceiveBufferSize();
-            // 简单起见，buffer不缓存，每次读事件来都新创建一个
             // 暂时也不考虑黏包/拆包场景(Netty中靠ByteToMessageDecoder解决，后续再分析其原理)
-            ByteBuffer readBuffer = ByteBuffer.allocate(receiveBufferSize);
 
-            int byteRead = socketChannel.read(readBuffer);
+            // 从jdk的ByteBuffer改造为使用ByteBuf
+            MyByteBufAllocator myByteBufAllocator = defaultChannelConfig.getAllocator();
+            MyByteBuf readBuffer = myByteBufAllocator.heapBuffer(receiveBufferSize);
+            int byteRead = readBuffer.writeBytes(socketChannel, receiveBufferSize);
             logger.info("processReadEvent byteRead={}", byteRead);
 
             // 记录下最近一次读取的字节数
@@ -76,15 +79,8 @@ public class MyNioSocketChannel extends MyNioChannel{
                 // 总消息读取次数+1
                 receivedMessageBytesLimiter.incMessagesRead();
 
-                // 将缓冲区当前的limit设置为position=0，用于后续对缓冲区的读取操作
-                readBuffer.flip();
-                // 根据缓冲区可读字节数创建字节数组
-                byte[] bytes = new byte[readBuffer.remaining()];
-                // 将缓冲区可读字节数组复制到新建的数组中
-                readBuffer.get(bytes);
-
                 // 触发pipeline的读取操作
-                this.getChannelPipeline().fireChannelRead(bytes);
+                this.getChannelPipeline().fireChannelRead(readBuffer);
             }
         }while (receivedMessageBytesLimiter.canContinueReading());
 

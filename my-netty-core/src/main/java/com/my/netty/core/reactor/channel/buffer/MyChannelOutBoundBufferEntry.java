@@ -1,5 +1,6 @@
 package com.my.netty.core.reactor.channel.buffer;
 
+import com.my.netty.bytebuffer.netty.MyByteBuf;
 import com.my.netty.core.reactor.channel.MyNioChannel;
 
 import java.nio.ByteBuffer;
@@ -21,13 +22,13 @@ class MyChannelOutBoundBufferEntry {
     private static final int DEFAULT_CHANNEL_OUTBOUND_BUFFER_ENTRY_OVERHEAD = 96;
 
     MyChannelOutBoundBufferEntry next;
-    ByteBuffer msg;
+    MyByteBuf msg;
     CompletableFuture<MyNioChannel> completableFuture;
     int msgSize;
     int pendingSize;
     boolean cancelled;
 
-    static MyChannelOutBoundBufferEntry newInstance(ByteBuffer msg, int msgSize, CompletableFuture<MyNioChannel> completableFuture) {
+    static MyChannelOutBoundBufferEntry newInstance(MyByteBuf msg, int msgSize, CompletableFuture<MyNioChannel> completableFuture) {
         // 简单起见，暂时不使用对象池，直接new
         MyChannelOutBoundBufferEntry entry = new MyChannelOutBoundBufferEntry();
         entry.msg = msg;

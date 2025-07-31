@@ -1,5 +1,6 @@
 package com.my.netty.core.reactor.handler.context;
 
+import com.my.netty.bytebuffer.netty.allocator.MyByteBufAllocator;
 import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoop;
 import com.my.netty.core.reactor.handler.MyChannelEventHandler;
@@ -55,6 +56,11 @@ public abstract class MyAbstractChannelHandlerContext implements MyChannelHandle
     @Override
     public MyNioEventLoop executor() {
         return this.pipeline.getChannel().getMyNioEventLoop();
+    }
+
+    @Override
+    public MyByteBufAllocator alloc() {
+        return channel().config().getAllocator();
     }
 
     @Override

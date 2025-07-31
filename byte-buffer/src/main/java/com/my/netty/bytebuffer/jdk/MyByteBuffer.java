@@ -1,7 +1,6 @@
 package com.my.netty.bytebuffer.jdk;
 
-import java.nio.BufferUnderflowException;
-import java.nio.ByteOrder;
+import java.nio.*;
 
 public abstract class MyByteBuffer extends MyBuffer {
 
@@ -27,6 +26,8 @@ public abstract class MyByteBuffer extends MyBuffer {
         if (capacity < 0) {
             throw new IllegalArgumentException();
         }
+
+        // 简单起见，只支持基于堆内存的HeapByteBuffer
         return new MyHeapByteBuffer(capacity, capacity);
     }
 
@@ -44,6 +45,23 @@ public abstract class MyByteBuffer extends MyBuffer {
      * 相对写操作
      * */
     public abstract MyByteBuffer put(byte b);
+
+    public final MyByteBuffer put(byte[] src) {
+        return put(src, 0, src.length);
+    }
+
+    public MyByteBuffer put(byte[] src, int offset, int length) {
+        checkBounds(offset, length, src.length);
+        if (length > remaining()) {
+            throw new BufferOverflowException();
+        }
+        int end = offset + length;
+        for (int i = offset; i < end; i++) {
+            // 循环put写入整个字节数组
+            this.put(src[i]);
+        }
+        return this;
+    }
 
     /**
      * 绝对写操作
@@ -87,6 +105,12 @@ public abstract class MyByteBuffer extends MyBuffer {
 
     public final ByteOrder order() {
         return bigEndian ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN;
+    }
+
+    public final MyByteBuffer order(ByteOrder bo) {
+        bigEndian = (bo == ByteOrder.BIG_ENDIAN);
+
+        return this;
     }
 
     // char、int、double、float、char、long、short
