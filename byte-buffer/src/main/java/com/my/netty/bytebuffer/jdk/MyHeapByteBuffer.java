@@ -1,5 +1,8 @@
 package com.my.netty.bytebuffer.jdk;
 
+/**
+ * 基本copy自jdk的HeapByteBuffer，但做了简化
+ * */
 public class MyHeapByteBuffer extends MyByteBuffer{
 
     MyHeapByteBuffer(int cap, int lim) {
@@ -65,27 +68,18 @@ public class MyHeapByteBuffer extends MyByteBuffer{
 
     @Override
     public MyByteBuffer compact() {
-
-        // The bytes between the buffer's current position and its limit,
-        // if any, are copied to the beginning of the buffer
         // 把底层数组中(position+offset)到(limit+offset)之间的内容整体往前挪，挪到数组起始处(0+offset), 实际内容的长度=remaining
         System.arraycopy(hb, ix(getPosition()), hb, ix(0), remaining());
-
-        // That is, the byte at index p=position() is copied to index zero, the byte at index p+1 is copied to index one,
-        // and so forth until the byte at index limit()-1 is copied to index n=limit()-1-p
 
         // 要理解下面position和limit的变化，需要意识到compact是一次从读模式切换到写模式的操作(之前读完了，就把剩下的还没有读完的压缩整理一下)
 
         // 压缩后实际内容的长度=remaining,所以压缩完后position，也就是后续开始写的位置就是从remaining开始
-        // The buffer's position is then set to n+1
         setPosition(remaining());
 
         // 写模式下，limit当然就变成了capacity了
-        // and its limit is set to its capacity.
         setLimit(getCapacity());
 
         // 压缩后，mark没意义了，就直接丢弃掉
-        // The mark, if defined, is discarded.
         discardMark();
         return this;
     }

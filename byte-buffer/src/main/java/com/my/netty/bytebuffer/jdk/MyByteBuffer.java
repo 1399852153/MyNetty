@@ -2,6 +2,9 @@ package com.my.netty.bytebuffer.jdk;
 
 import java.nio.*;
 
+/**
+ * 基本copy自jdk的ByteBuffer类，但做了简化
+ * */
 public abstract class MyByteBuffer extends MyBuffer {
 
     // These fields are declared here rather than in Heap-X-Buffer in order to
@@ -113,7 +116,7 @@ public abstract class MyByteBuffer extends MyBuffer {
         return this;
     }
 
-    // char、int、double、float、char、long、short
+    // 简单起见省略掉别的数据类型，仅支持int类型
 
     public abstract int getInt();
 
@@ -123,7 +126,6 @@ public abstract class MyByteBuffer extends MyBuffer {
 
     public abstract MyByteBuffer putInt(int index, int value);
 
-    // Unchecked accessors, for use by ByteBufferAs-X-Buffer classes
     abstract byte _get(int i);                          // package-private
     abstract void _put(int i, byte b);                  // package-private
 

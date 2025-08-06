@@ -4,48 +4,27 @@ import java.nio.BufferOverflowException;
 import java.nio.BufferUnderflowException;
 import java.nio.InvalidMarkException;
 
-
 /**
- * 1 capacity/limit/position/mark 四个关键属性
- * 2 相对的读写/绝对的读写
- * 3 Clearing, flipping, and rewinding 三种方便的操作
- * 4 举例使用方式
- * 5 各种子类的差异
- * 6 存在的缺陷，引出netty的ByteBuf
+ * 基本copy自jdk的Buffer类，但做了简化
  * */
 public abstract class MyBuffer {
 
     /**
-     * A buffer's capacity is the number of elements it contains.
-     * The capacity of a buffer is never negative and never changes.
-     *
      * buffer的capacity代表着总容量大小限制，不能为负数并且不可变
      * */
-    private final int capacity;
+    private int capacity;
 
     /**
-     * A buffer's limit is the index of the first element that should not be read or written.
-     * A buffer's limit is never negative and is never greater than its capacity.
-     *
      * buffer的limit标识着第一个不可读或者写的index位置，不能为负数并且不能大于capacity
      * */
     private int limit;
 
     /**
-     * A buffer's position is the index of the next element to be read or written.
-     * A buffer's position is never negative and is never greater than its limit.
-     *
      * buffer的position标识着下一个读或者写的元素的index位置，不能为负数并且不能大于limit
      * */
     private int position = 0;
 
     /**
-     * Marking and resetting
-     * A buffer's mark is the index to which its position will be reset when the reset method is invoked.
-     * The mark is not always defined, but when it is defined it is never negative and is never greater than the position.
-     * If the mark is defined then it is discarded when the position or the limit is adjusted to a value smaller than the mark.
-     * If the mark is not defined then invoking the reset method causes an InvalidMarkException to be thrown.
-     *
      * buffer的mark是用于reset方法(重置)被调用时，将position的值重试为mark对应下标.
      * mark并不总是被定义，但当它被定义时，它不会为负数，并且不会超过position
      * 如果mark被定义了，则它将会在position或者limit被调整为小于mark时被废弃(变成未定义的状态)
@@ -57,13 +36,10 @@ public abstract class MyBuffer {
     // NOTE: hoisted here for speed in JNI GetDirectBufferAddress
     /**
      * 有两种Buffer，分别基于堆内内存和堆外内存
-     * 堆外内存中，这个属性标示堆外内存具体的起始地址
+     * 堆外内存中，这个属性标示堆外内存具体的起始地址, MyNetty中暂时用不到
      * */
     long address;
 
-    /**
-     * Creates a new buffer with the given mark, position, limit, and capacity, after checking invariants.
-     */
     MyBuffer(int mark, int pos, int lim, int cap) {       // package-private
         if (cap < 0) {
             // The capacity of a buffer is never negative
@@ -102,13 +78,12 @@ public abstract class MyBuffer {
     }
 
     /**
-     * 是否可读
+     * 是否是只读的
      * */
     public abstract boolean isReadOnly();
 
     public final MyBuffer setLimit(int newLimit) {
         if ((newLimit > capacity) || (newLimit < 0)) {
-            // A buffer's limit is never negative and is never greater than its capacity
             throw new IllegalArgumentException();
         }
 
@@ -128,7 +103,6 @@ public abstract class MyBuffer {
 
     public final MyBuffer setPosition(int newPosition) {
         if ((newPosition > limit) || (newPosition < 0)) {
-            // A buffer's position is never negative and is never greater than its limit
             throw new IllegalArgumentException("invalid newPosition=" + newPosition + " limit=" + limit);
         }
         if (mark > newPosition) {
@@ -147,14 +121,11 @@ public abstract class MyBuffer {
     }
 
     /**
-     * A buffer's mark is the index to which its position will be reset when the reset method is invoked.
-     *
      * buffer的mark是用于reset方法(重置)被调用时，将position的值重试为mark对应下标.
      * */
     public final MyBuffer reset() {
         int m = mark;
         if (m < 0) {
-            // If the mark is not defined then invoking the reset method causes an InvalidMarkException to be thrown.
             // 如果mark没有被定义，则在调用reset方法时将会抛出InvalidMarkException
             throw new InvalidMarkException();
         }
@@ -163,9 +134,6 @@ public abstract class MyBuffer {
     }
 
     /**
-     * makes a buffer ready for a new sequence of channel-read or relative put operations:
-     * It sets the limit to the capacity and the position to zero.
-     *
      * 令buffer准备好作为一个新的序列用于channel读操作或者说让channel将数据put进来
      * 设置limit为capacity并且将position设置为0
      *
@@ -179,9 +147,6 @@ public abstract class MyBuffer {
     }
 
     /**
-     * makes a buffer ready for a new sequence of channel-write or relative get operations:
-     * It sets the limit to the current position and then sets the position to zero.
-     *
      * 令buffer准备好作为一个新的序列用于channel写操作或者说让channel将写进去的数据get走：
      * 设置limit为当前的position的值，并且将position设置为0
      * */
@@ -193,9 +158,6 @@ public abstract class MyBuffer {
     }
 
     /**
-     * makes a buffer ready for re-reading the data that it already contains:
-     * It leaves the limit unchanged and sets the position to zero.
-     *
      * 让一个buffer准备好重新读取数据，即在limit不变的情况下，将position设置为0
      * 因为读取操作会不断地推进position的位置，重置position为0，相当于允许读取重头读(类似磁带进行了倒带，即rewind)
      * */
