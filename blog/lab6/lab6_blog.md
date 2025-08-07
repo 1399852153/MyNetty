@@ -572,6 +572,331 @@ jdk中Buffer的体系是一个非常强大而又复杂的体系，上面介绍�
 但对于帮助读者理解为什么Netty要在jdk的ByteBuffer基础上再封装一个ByteBuf，个人认为这些内容已经足够了。
 
 ## 2. Netty ByteBuf介绍
+前面一节中对jdk的Buffer容器的核心工作原理进行了介绍。Buffer容器是一个设计精巧又功能强大的工具，但其还是存在着以下明显缺点：
+1. 由于存在读写两种模式，在使用时需要时刻关注当前的模式，并通过flip、rewind、compact、clear等方法转换模式，一旦搞错模式就会酿成大错。在面对较为复杂的频繁切换模式的场景时，开发者的心智负担会很重。
+2. 不支持自动的扩容。Buffer容器通过一个底层数组来存储元素，其自身与数组一样不支持动态的扩容，一旦在创建时指定了capacity，后续无法再扩大。  
+   不支持扩容的Buffer，要么在创建时预设一个非常大的capacity，要么就需要在容量不足时手动的将Buffer中的数据转移到新的更大空间的Buffer中。前者会浪费内存，后者则非常麻烦且性能不高。
+3. 没有支持池化复用的机制。每个Buffer在需要时都需要临时的分配内存空间，并在不需要时进行释放。在Buffer被大量使用的场景下，反复的创建和销毁基于Buffer会对GC造成很大压力，而对于基于堆外内存的DirectBuffer来说则由于堆外内存回收机制的延迟也会对堆外内存的使用带来不小的压力。  
+当然，缺点都是比较出来的，相比起Netty中更强大的ByteBuf，jdk中Buffer的缺点远不止此。相信读者在理解了Netty中ByteBuf体系后，会加深对其的理解。
+##### ByteBuf层次体系
+与jdk的Buffer体系类似，Netty中的ByteBuf同样是通过不同层次子类的组合来实现不同属性的各种ByteBuf。
+* Netty作为一个网络框架，其只专注于最通用的Byte类型元素的容器存储，所以底层的容器类只接就是ByteBuf。因此没有IntBuf、ShortBuf这些子类。
+* Netty支持基于引用计数的自动容器回收机制，可以在容器不再被使用时即时的将容器所占用的内存回收掉，所以抽象出了AbstractReferenceCountedByteBuf类。
+* Netty支持池化容器，因此设计了PooledByteBuf子类。
+* Netty同样支持堆内和堆外两种不同内存类型，因此更进一步的抽象出了PooledHeapByteBuf、PooledDirectByteBuf、UnpooledHeapByteBuf和UnpooledDirectByteBuf这四个核心子类。
+* 除此之外，Netty还提供了注入绕过数组越界检查的基于Unsafe的PooledUnsafeHeapByteBuf、PooledUnsafeDirectByteBuf；也提供了基于切片，逻辑视图的零拷贝的CompositeByteBuf，以及各种功能强大，用处各异的子类实现。
+##### ByteBuf主要子类示意图
+![ByteBuf.png](ByteBuf.png)
+#####
+
+#####
+```java
+public abstract class MyAbstractByteBuf extends MyByteBuf {
+    // 。。。 仅保留核心逻辑
+    
+    int readerIndex;
+    int writerIndex;
+    private int markedReaderIndex;
+    private int markedWriterIndex;
+    private int maxCapacity;
+
+    /**
+     * 是否在编辑读/写指针的时候进行边界校验
+     * 默认为true，设置为false可以不进行校验从而略微的提高性能，但可能出现内存越界的问题
+     */
+    private static final boolean checkBounds = SystemPropertyUtil.getBoolean("my.netty.check.bounds",true);
+
+    protected MyAbstractByteBuf(int maxCapacity) {
+        if (maxCapacity < 0) {
+            throw new IllegalArgumentException("maxCapacity must > 0");
+        }
+        this.maxCapacity = maxCapacity;
+    }
+
+    @Override
+    public int maxCapacity() {
+        return maxCapacity;
+    }
+
+    protected final void maxCapacity(int maxCapacity) {
+        this.maxCapacity = maxCapacity;
+    }
+
+    @Override
+    public int readerIndex() {
+        return readerIndex;
+    }
+
+    @Override
+    public MyByteBuf readerIndex(int readerIndex) {
+        if (checkBounds) {
+            checkIndexBounds(readerIndex, writerIndex, capacity());
+        }
+        this.readerIndex = readerIndex;
+        return this;
+    }
+
+    @Override
+    public int writerIndex() {
+        return writerIndex;
+    }
+
+    @Override
+    public MyByteBuf writerIndex(int writerIndex) {
+        if (checkBounds) {
+            checkIndexBounds(readerIndex, writerIndex, capacity());
+        }
+        this.writerIndex = writerIndex;
+        return this;
+    }
+
+    @Override
+    public MyByteBuf markReaderIndex() {
+        markedReaderIndex = readerIndex;
+        return this;
+    }
+    
+    @Override
+    public MyByteBuf markWriterIndex() {
+        markedWriterIndex = writerIndex;
+        return this;
+    }
+    
+    @Override
+    public byte getByte(int index) {
+        checkIndex(index,1);
+        return _getByte(index);
+    }
+
+    @Override
+    public byte readByte() {
+        // 检查是否可以读1个字节
+        checkReadableBytes0(1);
+        int i = readerIndex;
+        byte b = _getByte(i);
+        // 和jdk的实现一样，在getByte的基础上，推进读指针
+        readerIndex = i + 1;
+        return b;
+    }
+    
+    protected abstract byte _getByte(int index);
+
+    @Override
+    public MyByteBuf setByte(int index, int value) {
+        checkIndex(index,1);
+        _setByte(index, value);
+        return this;
+    }
+
+    protected abstract void _setByte(int index, int value);
+
+    public abstract MyByteBufAllocator alloc();
+
+    @Override
+    public MyByteBuf writeByte(int value) {
+        ensureWritable0(1);
+        _setByte(writerIndex++, value);
+        return this;
+    }
+
+    @Override
+    public MyByteBuf writeBytes(byte[] src) {
+        return writeBytes(src, 0, src.length);
+    }
+    
+    @Override
+    public MyByteBuf readBytes(byte[] dst) {
+        readBytes(dst, 0, dst.length);
+        return this;
+    }
+    
+    @Override
+    public boolean isReadable() {
+        return writerIndex > readerIndex;
+    }
+}
+```
+#####
+```java
+/**
+ * 参考自netty的UnpooledHeapByteBuf，在其基础上做了简化(只实现了最基础的一些功能以作参考)
+ * */
+public class MyUnPooledHeapByteBuf extends MyAbstractReferenceCountedByteBuf{
+
+    private final MyByteBufAllocator alloc;
+
+    private ByteBuffer tmpNioBuf;
+
+    public static final byte[] EMPTY_BYTES = {};
+    private byte[] array;
+
+    public MyUnPooledHeapByteBuf(MyByteBufAllocator alloc, int initialCapacity, int maxCapacity) {
+        super(maxCapacity);
+
+        if (initialCapacity > maxCapacity) {
+            throw new IllegalArgumentException(String.format(
+                    "initialCapacity(%d) > maxCapacity(%d)", initialCapacity, maxCapacity));
+        }
+
+        this.alloc = alloc;
+        this.array = new byte[initialCapacity];
+        setIndex(0, 0);
+    }
+
+    @Override
+    public int capacity() {
+        // heapByteBuf的capacity就是内部数组的长度
+        return array.length;
+    }
+
+    @Override
+    public MyByteBuf capacity(int newCapacity) {
+        checkNewCapacity(newCapacity);
+
+        byte[] oldArray = array;
+        int oldCapacity = oldArray.length;
+        if (newCapacity == oldCapacity) {
+            // 特殊情况，如果与之前的容量一样则无事发生
+            return this;
+        }
+
+        int bytesToCopy;
+        if (newCapacity > oldCapacity) {
+            // 如果新的capacity比之前的大，那么就将原来内部数组中的内容整个copy到新数组中
+            bytesToCopy = oldCapacity;
+        } else {
+            // 如果新的capacity比之前的小，那么可能需要截断之前的数组内容
+            if (writerIndex() > newCapacity) {
+                // 写指针大于newCapacity，确定需要截断
+                this.readerIndex = Math.min(readerIndex(), newCapacity);
+                this.writerIndex = newCapacity;
+            }
+            bytesToCopy = newCapacity;
+        }
+
+        // 将原始内部数组中的内容copy到新数组中
+        byte[] newArray = new byte[newCapacity];
+        System.arraycopy(oldArray, 0, newArray, 0, bytesToCopy);
+        this.array = newArray;
+        return this;
+    }
+
+    @Override
+    public int readBytes(GatheringByteChannel out, int length) throws IOException {
+//        checkReadableBytes(length);
+        int readBytes = getBytes(readerIndex, out, length, true);
+        readerIndex += readBytes;
+        return readBytes;
+    }
+
+    @Override
+    public int getBytes(int index, GatheringByteChannel out, int length) throws IOException {
+        return getBytes(index, out, length, false);
+    }
+
+    @Override
+    public int setBytes(int index, ScatteringByteChannel in, int length) throws IOException {
+        try {
+            return in.read((ByteBuffer) internalNioBuffer().clear().position(index).limit(index + length));
+        } catch (ClosedChannelException ignored) {
+            return -1;
+        }
+    }
+
+    @Override
+    public byte[] array() {
+        return this.array;
+    }
+
+    @Override
+    public int arrayOffset() {
+        // 非Pool的，没有偏移量
+        return 0;
+    }
+
+    @Override
+    public MyByteBuf getBytes(int index, MyByteBuf dst, int dstIndex, int length) {
+        // 带上dst的偏移量
+        getBytes(index, dst.array(), dst.arrayOffset() + dstIndex, length);
+        return this;
+    }
+
+    @Override
+    public MyByteBuf getBytes(int index, byte[] dst, int dstIndex, int length) {
+        System.arraycopy(array, index, dst, dstIndex, length);
+        return this;
+    }
+
+    @Override
+    public MyByteBuf setBytes(int index, MyByteBuf src, int srcIndex, int length) {
+        // 带上src的偏移量
+        setBytes(index, src.array(), src.arrayOffset() + srcIndex, length);
+        return this;
+    }
+
+
+    @Override
+    public MyByteBuf setBytes(int index, byte[] src, int srcIndex, int length) {
+        System.arraycopy(src, srcIndex, array, index, length);
+        return this;
+    }
+
+    @Override
+    protected byte _getByte(int index) {
+        return array[index];
+    }
+
+    @Override
+    protected void _setByte(int index, int value) {
+        this.array[index] = (byte) value;
+    }
+
+    @Override
+    public MyByteBufAllocator alloc() {
+        return alloc;
+    }
+
+    @Override
+    protected int _getInt(int index) {
+        return BitsUtil.getInt(this.array,index);
+    }
+
+    @Override
+    protected int _getIntLE(int index) {
+        return BitsUtil.getIntLE(this.array,index);
+    }
+
+    @Override
+    protected void deallocate() {
+        // heapByteBuf的回收很简单，就是清空内部数组，等待gc回收掉原来的数组对象即可
+        array = EMPTY_BYTES;
+    }
+
+    @Override
+    public ByteBuffer internalNioBuffer(int index, int length) {
+        checkIndex(index, length);
+        return (ByteBuffer) internalNioBuffer().clear().position(index).limit(index + length);
+    }
+
+    private ByteBuffer internalNioBuffer() {
+        ByteBuffer tmpNioBuf = this.tmpNioBuf;
+        if (tmpNioBuf == null) {
+            this.tmpNioBuf = tmpNioBuf = ByteBuffer.wrap(array);
+        }
+        return tmpNioBuf;
+    }
+
+    private int getBytes(int index, GatheringByteChannel out, int length, boolean internal) throws IOException {
+        ByteBuffer tmpBuf;
+        if (internal) {
+            tmpBuf = internalNioBuffer();
+        } else {
+            tmpBuf = ByteBuffer.wrap(array);
+        }
+        return out.write((ByteBuffer) tmpBuf.clear().position(index).limit(index + length));
+    }
+}
+```
 
 
 
