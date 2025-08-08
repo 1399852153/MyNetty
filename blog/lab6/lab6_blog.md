@@ -1,7 +1,6 @@
 # 从零开始实现简易版Netty(六) MyNetty ByteBuf实现
-## 1. jdk Buffer简单介绍
-在上一篇博客中，lab5版本的MyNetty中实现了FastThreadLocal，为后续实现池化内存分配功能打下了基础。池化内存分配是netty中非常核心也非常复杂的一个功能，没法在一次迭代中完整的实现，MyNetty打算分为4个迭代逐步的将其实现。  
-按照计划，本篇博客中，lab6版本的MyNetty需要实现一个非常基础的，非池化的ByteBuf作为后续迭代的基础。  
+## 1. jdk Buffer介绍
+在上一篇博客中，lab5版本的MyNetty中实现了FastThreadLocal，为后续实现池化内存分配功能打下了基础。池化内存分配是netty中非常核心也非常复杂的一个功能，没法在一次迭代中完整的实现，MyNetty打算分为4个迭代逐步的将其实现。按照计划，本篇博客中，lab6版本的MyNetty需要实现一个非常基础的，非池化的ByteBuf作为后续迭代的基础。  
 由于本文属于系列博客，读者需要对之前的博客内容有所了解才能更好地理解本文内容。
 * lab1版本博客：[从零开始实现简易版Netty(一) MyNetty Reactor模式](https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)
 * lab2版本博客：[从零开始实现简易版Netty(二) MyNetty pipeline流水线](https://www.cnblogs.com/xiaoxiongcanguan/p/18964326)
@@ -10,7 +9,7 @@
 * lab5版本博客：[从零开始实现简易版Netty(五) MyNetty FastThreadLocal实现](https://www.cnblogs.com/xiaoxiongcanguan/p/19005381)
 #####
 在前面的实验中，MyNetty中用来承载消息的容器一直是java中nio包下的ByteBuffer。与FastThreadLocal类似，Netty同样不满足于jdk自带的ByteBuffer，而是基于ByteBuffer实现了性能更好，功能更强大的ByteBuf容器。  
-但在学习Netty的ByteBuf容器之前，我们还是需要先了解jdk中的ByteBuffer工作原理。只有在理解了jdk原生的ByteBuffer的实现原理和优缺点后，我们才能更好的理解Netty中ByteBuf，以及ByteBuf的优势。
+但在学习Netty的ByteBuf容器之前，我们还是需要先了解jdk中的ByteBuffer工作原理。只有在理解了jdk原生的ByteBuffer的实现原理和优缺点后，我们才能更好的理解Netty中的ByteBuf和它的优势。
 ##### 
 jdk中的Buffer是一个巨大的多维层次体系，按照所存储的数据类型可以分为byte、int、short等，按照底层承载数据的内存区域的不同可以分为基于堆内存(heap)的和基于堆外内存(direct)，按照是否仅可读可以分为普通可读可写的buffer和只读buffer。  
 Buffer按照类的继承关系将这几个维度以多层的子类继承关系组织起来，其中java.nio.Buffer是最顶层的抽象类。
@@ -290,13 +289,13 @@ public abstract class MyBuffer {
   ByteBuffer除了提供byte类型的读写方法外，也提供了getInt、putInt、getShort、putLong等等其它数据类型读写的方法。其底层本质上是将1或N个字节看做一个完整的特定数据类型进行写入或读取。  
   比如通过相对写操作putInt将一个int类型的数据写入Buffer等价于一次写入了4个byte，position自增4。读取操作则是从特定位置开始，将包含自身在内的共四个byte视作一个int类型返回。  
   同时ByteBuffer也提供了诸如asCharBuffer、asIntBuffer等等将自身转换成逻辑上等价的其它类型Buffer的方法方便使用。  
-Buffer容器中，特别时关于堆外内存的使用还有很多细节值得研究，但这不是MyNetty系列博客的重点，感兴趣的读者可以自行阅读jdk的对应源码或者相关资料，限于个人能力这里就不再展开了。
+Buffer容器中，特别是关于堆外内存的使用还有很多细节值得研究，但这不是MyNetty系列博客的重点，感兴趣的读者可以自行阅读jdk的对应源码或者相关资料，限于个人能力这里就不再展开了。
 ##### 大端法与小端法
 * 前面我们提到，Buffer对于int或者long等多个byte字节构成的数据，是通过将多个字节合并在一起视为整体来实现的。而实际上这里面存在一个问题，即从前到后的哪个字节代表高位，哪个字节代表低位。如果网络传输等场景下两边的表示方式不一致，则读取到的字节流可能会被错误的解析。  
 * 内存地址的示意图一般是从左到右，从低到高排列的。作为普通人来说，看数字时也习惯了高位在左(前)，低位在右(后)的模式(1024，千位在前，个位在后)。这种低位内存的字节代表高位，高位内存的字节代表低位的表示方法叫做大端法。与之相对的，低位内存代表低位，高位内存代表高位的表示方法则被叫做小端法。  
 * 读者可能会有疑问，既然大端法符合人们的直观理解，为什么不让所有的软硬件系统都统一使用大端法存储数据呢？免得还要互相之间各种约定，避免转换错误。  
-  这是因为小端法在做一些强制类型转换等基础的底层操作时，硬件性能更好。举个例子，有一个占4字节的int数据，想要强制转换成一个short类型。对于小端法而言，只需要从起始位置开始寻址找到两个字节返回即可，因为低位字节代表低位，强转时忽略高位即可。  
-  而大端法必须基于起始位置四个字节中的后两个字节才能转换成功。在性能重于一切的底层硬件或操作系统层面，这种效率上的差异不能完全的忽略。所以时至今日，依然有很多的硬件和操作系统使用小端法维护int等类型的数据。  
+  这是因为小端法在做一些强制类型转换等基础的底层操作时，硬件性能更好。举个例子，有一个占4字节的int数据，想要强制转换成一个short类型。对于小端法而言，只需要从起始位置开始寻址找到两个字节返回即可，因为低位字节代表低位，强转时忽略高位即可。而大端法必须基于起始位置四个字节中的后两个字节才能转换成功。  
+  在性能重于一切的底层硬件或操作系统层面，这种效率上的差异不能完全的忽略。所以时至今日，依然有很多的硬件和操作系统使用小端法维护int等类型的数据。  
 * 因此，jdk的ByteBuffer中支持指定以小端法或者大端法来存储数据，这样可以在网络传输等需要将内存数据编码为字节流的场景下，让用户能自由的转换为约定好的，统一的表示方式。
 #####
 ```java
@@ -583,7 +582,7 @@ jdk中Buffer的体系是一个非常强大而又复杂的体系，上面介绍�
 当然，缺点都是比较出来的，相比起Netty中更强大的ByteBuf，jdk中Buffer的缺点远不止此。相信读者在理解了Netty中ByteBuf体系后，会加深对其的理解。
 ##### ByteBuf层次体系
 与jdk的Buffer体系类似，Netty中的ByteBuf同样是通过不同层次子类的组合来实现不同属性的各种ByteBuf。
-* Netty作为一个网络框架，其只专注于最通用的Byte类型元素的容器存储，所以底层的容器类只接就是ByteBuf。因此没有IntBuf、ShortBuf这些子类。
+* Netty作为一个网络框架，其只专注于最通用的Byte类型元素的容器存储，所以底层的容器类直接就是ByteBuf，没有IntBuf、ShortBuf这些子类。
 * Netty支持基于引用计数的自动容器回收机制，可以在容器不再被使用时，即时的将容器所占用的内存回收掉，所以抽象出了AbstractReferenceCountedByteBuf类。
 * Netty支持池化容器，因此设计了PooledByteBuf子类。
 * Netty同样支持堆内和堆外两种不同内存类型，因此更进一步的抽象出了PooledHeapByteBuf、PooledDirectByteBuf、UnpooledHeapByteBuf和UnpooledDirectByteBuf这四个核心子类。
@@ -597,7 +596,6 @@ jdk中Buffer的体系是一个非常强大而又复杂的体系，上面介绍�
   ByteBuf同样支持相对读写(比如readByte、writeByte)与参数中指定index下标位置的绝对读写(比如getByte、setByte)。在相对读操作会自动的推进读指针readerIndex，而在相对写操作中则会自动推进写指针writerIndex。  
   因为同时维护了读写指针的原因，netty的ByteBuf可以同时的进行读和写，而不用关心当前是属于什么模式，也无需使用flip等方法切换形态。
 * 与ByteBuffer类似，netty的ByteBuf内部的指针属性同样有一个严格的大小关系，用于防止写操作超过容量，也防止读操作读取到未实际写入的非法区域。即readerIndex <= writerIndex <= capacity <= maxCapacity。  
-  其中0到writerIndex之间是写入了数据的区域
 ##### 支持自动扩容
 * maxCapacity代表最大容量，与ByteBuffer中capacity类似，是ByteBuf的最大容量限制。但与ByteBuffer不同的是，netty的ByteBuf中的maxCapacity不等于其底层数组实际的容量，很多情况下只是起到一个阈值的作用。
 * capacity才代表ByteBuf实际底层数组的大小(capacity方法)，在写入数据时，会检查当前的capacity是否足以满足写入的要求。如果发现capacity不足时，会触发自动扩容。  
@@ -612,10 +610,10 @@ jdk中Buffer的体系是一个非常强大而又复杂的体系，上面介绍�
 * 因为ByteBuf本身不会互相引用而出现循环依赖，所以引用计数的内存管理机制是非常高效的。比起依赖jvm的gc机制，在确定不再使用ByteBuf时主动的释放，虽然略微的增加了开发者的心智负担，但却可以大幅的减轻gc的压力。  
   Netty作为一个高性能网络框架，实际工作中都是通过ByteBuf容器来进行通信，往往会在短时间内大量创建并销毁ByteBuf。如果完全依靠gc周期性的回收，那么会给系统带来巨大的压力。  
   基于引用计数的内存管理能够主动和实时的进行内存回收，将内存回收的动作较为均匀的分摊到每一个时间段内，大大增强了系统的稳定性。
-* 其实就像需要手动进行对象回收的语言(比如C语言)在内存回收上比自动垃圾回收的语言(java)性能通常更好一样，自动的gc虽然解放了开发者的心智负担，但比起精细的手工管理、实时的释放在性能上还是略逊一筹。
+* 其实就像需要手动进行对象回收的语言(比如C语言)在内存回收上比自动垃圾回收的语言(java)性能通常更好一样，自动的gc虽然解放了开发者的心智负担，但比起精细的手工管理、实时的释放，其在性能上还是略逊一筹。
 ##### 支持ByteBuf容器的池化存储
 * 池化的ByteBuf容器在创建时，底层数组所需要的内存在绝大多数情况下都能从已经预先申请好的内存区域中获得，实际使用中仅需要进行一些标记即可，无需jvm或者操作系统进行真实的内存分配。而在ByteBuf容器不再使用而被释放时，也仅仅需要修改一些针对内存区域控制权的即可，不需要进行实际的内存回收操作。  
-  可以看到，池化的容器机制对gc非常友好，与平常接触到的各种连接池、对象池一样，都能够极大的提高所操作对象的吞吐量。  
+  池化的容器机制对gc非常友好，与平常接触到的各种连接池、对象池一样，通过避免大量初始化与销毁的开销，极大的提高了使用特定对象的吞吐量。  
 * ByteBuf容器池化存储相关的工作原理比较复杂，我们在MyNetty后续的迭代中会逐一实现并在博客中介绍其工作原理。本期关于ByteBuf的介绍仅限于Unpooled非池化的实现。
 #####
 ```java
@@ -1029,7 +1027,7 @@ public abstract class MyAbstractReferenceCountedByteBuf extends MyAbstractByteBu
 ## 总结
 * 在本篇博客中，先对jdk的Buffer容器体系进行了介绍，并基于Buffer容器的一些缺点引出了Netty的ByteBuf容器。ByteBuf容器在jdk的Buffer容器基础上，做了非常多的拓展以改进Buffer容器的缺点。
 * 限于个人水平，博客中对jdk的Buffer和Netty的ByteBuf容器的工作原理介绍都是点到即止，仅仅分析了一些最基础和核心的点。要想更好的理解其底层原理，还是需要读者仔细的阅读资料和源码才行。
-* lab6中实现的非池化ByteBuf机制虽然非常简单，但为后续迭代中真正核心且复杂的PooledByteBuf即池化内存管理的实现打下了基础。后续的lab7-lab9中，MyNetty将会参考netty逐步的实现一个简化版的池化内存管理体系。
+* lab6中实现的非池化ByteBuf机制虽然非常简单，但为后续迭代中真正核心且复杂的PooledByteBuf即池化内存管理的实现打下了基础。后续的lab7-lab9中，MyNetty将会参考netty逐步的实现一个简化版的池化内存管理体系，帮助读者更好的理解netty。
 #####
 博客中展示的完整代码在我的github上：https://github.com/1399852153/MyNetty (release/lab6_bytebuf 分支)，内容如有错误，还请多多指教。
 
