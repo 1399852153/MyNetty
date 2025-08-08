@@ -39,6 +39,8 @@ Buffer按照类的继承关系将这几个维度以多层的子类继承关系�
 * flip方法用于在写入完成后，令Buffer转换到读模式。flip操作会将position归零，而limit被设置为之前写模式下的position以避免读取越界。
 * rewind方法一般用于在读取数据后，重置读指针以方便重复的读取。rewind操作中只会简单的将position归零，但不修改limit的值。
 * clear方法用于清空Buffer容器，重新写入新的数据。clear操作会将position设置为0，而limit设置为等于capacity。设置完成后的指针位置与Buffer刚被创建时一样。
+##### Buffer结构图
+![Buffer-Structure.png](Buffer-Structure.png)
 ##### 
 ```java
 /**
@@ -566,7 +568,6 @@ public class MyHeapByteBuffer extends MyByteBuffer{
         return false;
     }
 }
-
 ```
 #####
 jdk中Buffer的体系是一个非常强大而又复杂的体系，上面介绍的关于Buffer体系的内容只是其中比较核心的部分内容。除此之外还有很多关于Buffer内存映射、零拷贝、切片视图、堆外内存回收等等更多的内容限于篇幅在本文中完全没有涉及。  
@@ -577,7 +578,7 @@ jdk中Buffer的体系是一个非常强大而又复杂的体系，上面介绍�
 1. 由于存在读写两种模式，在使用时需要时刻关注当前的模式，并通过flip、rewind、compact、clear等方法转换模式，一旦搞错模式就会酿成大错。在面对较为复杂的频繁切换模式的场景时，开发者的心智负担会很重。
 2. 不支持自动的扩容。Buffer容器通过一个底层数组来存储元素，其自身与数组一样不支持动态的扩容，一旦在创建时指定了capacity，后续无法再扩大。  
    不支持扩容的Buffer，要么在创建时预设一个非常大的capacity，要么就需要在容量不足时手动的将Buffer中的数据转移到新的更大空间的Buffer中。前者会浪费内存，后者则非常麻烦且性能不高。
-3. jdk的DirectBuffer中的堆外底层数组的内存回收基于PhantomReference机制，在gc时触发回收动作。因此在内存回收上存在一定的延时性，在大量创建并销毁Buffer容器的场景下，性能较差。
+3. jdk的DirectBuffer中的堆外底层数组的内存回收基于PhantomReference，在gc时触发回收动作。因此在内存回收上存在一定的延时性，在需要大量创建并销毁Buffer容器的场景下，性能较差。
 4. 没有支持池化复用的机制。每个Buffer在需要时都需要临时的分配内存空间，并在不需要时进行释放。在Buffer被大量使用的场景下，反复的创建和销毁基于Buffer会对GC造成很大压力，而对于基于堆外内存的DirectBuffer来说由于堆外内存回收机制的延迟也会对堆外内存的使用带来不小的压力。
 当然，缺点都是比较出来的，相比起Netty中更强大的ByteBuf，jdk中Buffer的缺点远不止此。相信读者在理解了Netty中ByteBuf体系后，会加深对其的理解。
 ##### ByteBuf层次体系
@@ -595,19 +596,26 @@ jdk中Buffer的体系是一个非常强大而又复杂的体系，上面介绍�
 * 首先针对Buffer中读写模式无法共存，需要时刻注意当前模式的问题。Netty中的ByteBuf设计中引入了读写两个指针(AbstractByteBuf中的readerIndex和writerIndex)，而非只有一个position指针。  
   ByteBuf同样支持相对读写(比如readByte、writeByte)与参数中指定index下标位置的绝对读写(比如getByte、setByte)。在相对读操作会自动的推进读指针readerIndex，而在相对写操作中则会自动推进写指针writerIndex。  
   因为同时维护了读写指针的原因，netty的ByteBuf可以同时的进行读和写，而不用关心当前是属于什么模式，也无需使用flip等方法切换形态。
-* 与ByteBuffer类似，netty的ByteBuf内部的指针属性同样有一个严格的大小关系，用于防止写操作超过最大容量，也防止读操作读取到未实际写入的区域。  
-  即readerIndex <= writerIndex <= capacity <= maxCapacity。
+* 与ByteBuffer类似，netty的ByteBuf内部的指针属性同样有一个严格的大小关系，用于防止写操作超过容量，也防止读操作读取到未实际写入的非法区域。即readerIndex <= writerIndex <= capacity <= maxCapacity。  
+  其中0到writerIndex之间是写入了数据的区域
 ##### 支持自动扩容
 * maxCapacity代表最大容量，与ByteBuffer中capacity类似，是ByteBuf的最大容量限制。但与ByteBuffer不同的是，netty的ByteBuf中的maxCapacity不等于其底层数组实际的容量，很多情况下只是起到一个阈值的作用。
-* capacity代表ByteBuf实际底层数组的大小(capacity方法)，在写入数据时，会检查当前的capacity是否足够以满足写入的要求。如果发现capacity不足时，会触发自动扩容。  
+* capacity才代表ByteBuf实际底层数组的大小(capacity方法)，在写入数据时，会检查当前的capacity是否足以满足写入的要求。如果发现capacity不足时，会触发自动扩容。  
   自动扩容的capacity无论如何不能扩容到超过maxCapacity，如果超过maxCapacity依然无法放入新写入的数据则会报错(IndexOutOfBoundsException)。
   未超过maxCapacity时，但写入的数据量超过当前底层数组容量时则会进行扩容。扩容时，如果当前底层数组的大小低于阈值(4M)时，则会较为激进的2倍数扩容，以减少未来可能继续扩容的次数；当超过阈值时，则以较为保守的方式进行扩容，以尽量的节约内存。(ByteBufAllocator.calculateNewCapacity方法)  
 * 通过maxCapacity和capacity两个不同容量属性的设计，ByteBuf在能控制最大内存使用量的前提下，能够不一口气申请一个极大的数组，而是按需的使用内存。
+##### ByteBuf结构图
+![ByteBuf-Structure.png](ByteBuf-Structure.png)
 ##### 支持基于引用计数的手动内存释放
-todo
+* Netty的ByteBuf能够基于引用计数机制来实现手动的内存资源释放(AbstractReferenceCountedByteBuf)。在ByteBuf容器被创建时，其被引用数被初始化为1。当使用者认为不需要再使用容器时，就将被引用数自减1(release方法)。当容器的被引用数被设置为0时，则会触发ByteBuf容器的销毁流程，释放掉底层数组所占用的内存空间。
+  当ByteBuf容器需要交给其它线程会处理时，需要通过retain方法增加被引用数，避免其因为其它使用者release而被提前销毁。
+* 因为ByteBuf本身不会互相引用而出现循环依赖，所以引用计数的内存管理机制是非常高效的。比起依赖jvm的gc机制，在确定不再使用ByteBuf时主动的释放，虽然略微的增加了开发者的心智负担，但却可以大幅的减轻gc的压力。  
+  Netty作为一个高性能网络框架，实际工作中都是通过ByteBuf容器来进行通信，往往会在短时间内大量创建并销毁ByteBuf。如果完全依靠gc周期性的回收，那么会给系统带来巨大的压力。  
+  基于引用计数的内存管理能够主动和实时的进行内存回收，将内存回收的动作较为均匀的分摊到每一个时间段内，大大增强了系统的稳定性。
+* 其实就像需要手动进行对象回收的语言(比如C语言)在内存回收上比自动垃圾回收的语言(java)性能通常更好一样，自动的gc虽然解放了开发者的心智负担，但比起精细的手工管理、实时的释放在性能上还是略逊一筹。
 ##### 支持ByteBuf容器的池化存储
 * 池化的ByteBuf容器在创建时，底层数组所需要的内存在绝大多数情况下都能从已经预先申请好的内存区域中获得，实际使用中仅需要进行一些标记即可，无需jvm或者操作系统进行真实的内存分配。而在ByteBuf容器不再使用而被释放时，也仅仅需要修改一些针对内存区域控制权的即可，不需要进行实际的内存回收操作。  
-  可以看到，池化的容器机制对gc非常友好，与平常接触到的连接池、对象池等等一样，都能够极大的提高所操作对象的吞吐量。  
+  可以看到，池化的容器机制对gc非常友好，与平常接触到的各种连接池、对象池一样，都能够极大的提高所操作对象的吞吐量。  
 * ByteBuf容器池化存储相关的工作原理比较复杂，我们在MyNetty后续的迭代中会逐一实现并在博客中介绍其工作原理。本期关于ByteBuf的介绍仅限于Unpooled非池化的实现。
 #####
 ```java
@@ -803,7 +811,6 @@ public class MyUnPooledHeapByteBuf extends MyAbstractReferenceCountedByteBuf{
 
     @Override
     public int readBytes(GatheringByteChannel out, int length) throws IOException {
-//        checkReadableBytes(length);
         int readBytes = getBytes(readerIndex, out, length, true);
         readerIndex += readBytes;
         return readBytes;
@@ -1019,6 +1026,11 @@ public abstract class MyAbstractReferenceCountedByteBuf extends MyAbstractByteBu
     protected abstract void deallocate();
 }
 ```
-
+## 总结
+* 在本篇博客中，先对jdk的Buffer容器体系进行了介绍，并基于Buffer容器的一些缺点引出了Netty的ByteBuf容器。ByteBuf容器在jdk的Buffer容器基础上，做了非常多的拓展以改进Buffer容器的缺点。
+* 限于个人水平，博客中对jdk的Buffer和Netty的ByteBuf容器的工作原理介绍都是点到即止，仅仅分析了一些最基础和核心的点。要想更好的理解其底层原理，还是需要读者仔细的阅读资料和源码才行。
+* lab6中实现的非池化ByteBuf机制虽然非常简单，但为后续迭代中真正核心且复杂的PooledByteBuf即池化内存管理的实现打下了基础。后续的lab7-lab9中，MyNetty将会参考netty逐步的实现一个简化版的池化内存管理体系。
+#####
+博客中展示的完整代码在我的github上：https://github.com/1399852153/MyNetty (release/lab6_bytebuf 分支)，内容如有错误，还请多多指教。
 
 

@@ -28,3 +28,5 @@
    博客地址: [从零开始实现简易版Netty(四) MyNetty 高效的数据写出实现](https://www.cnblogs.com/xiaoxiongcanguan/p/18992091)
 5. lab5版本分支:  release/lab5_fast_thread_local  
    博客地址: [从零开始实现简易版Netty(五) MyNetty FastThreadLocal实现](https://www.cnblogs.com/xiaoxiongcanguan/p/19005381)
+6. lab6版本分支:  release/lab6_bytebuf  
+   博客地址: [从零开始实现简易版Netty(六) MyNetty ByteBuf实现](https://www.cnblogs.com/xiaoxiongcanguan/p/19029215)
