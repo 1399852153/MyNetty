@@ -1,4 +1,6 @@
-package com.my.netty.bytebuffer.jdk;
+package com.my.netty.bytebuffer.demo.jdk;
+
+import com.my.netty.bytebuffer.jdk.MyByteBuffer;
 
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;

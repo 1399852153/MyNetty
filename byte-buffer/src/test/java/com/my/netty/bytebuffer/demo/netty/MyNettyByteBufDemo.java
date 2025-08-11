@@ -1,5 +1,6 @@
-package com.my.netty.bytebuffer.netty;
+package com.my.netty.bytebuffer.demo.netty;
 
+import com.my.netty.bytebuffer.netty.MyByteBuf;
 import com.my.netty.bytebuffer.netty.allocator.MyByteBufAllocator;
 import com.my.netty.bytebuffer.netty.allocator.MyUnpooledByteBufAllocator;
 
