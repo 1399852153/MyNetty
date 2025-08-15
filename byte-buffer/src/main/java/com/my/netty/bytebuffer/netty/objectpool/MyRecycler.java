@@ -10,7 +10,6 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
 public abstract class MyRecycler<T> {
 
-
     /**
      * 每个线程最多可以池化缓存的对象数量。因为内存是有限的，不能无限制的池化。所以需要用户基于开启的线程数和所池化缓存对象的平均内存大小来设置
      * maxCapacityPerThread也可以被设置为0，来标识不进行池化
@@ -60,11 +59,11 @@ public abstract class MyRecycler<T> {
      * 2. 每个线程能池化的对象个数是有限的(maxCapacityPerThread控制)
      * 3. 不是所有类型的线程都能持有池化对象（默认配置只有netty的FastThreadLocalThread才行）
      *
-     * 第2和3设计的目的都是为了避免过多的被池化对象导致占用过多的内存
+     * 第2和3设计的目的都是为了避免过多的池化对象导致占用过多的内存
      * */
     public final T get() {
         if (maxCapacityPerThread == 0) {
-            // 如果每个线程池化的个数为0，就不需要进行池化，返回一个持有NOOP_HANDLE的对象做降级（逻辑上是非池化的）。NOOP_HANDLE在回收时recycle方法里什么也不做
+            // netty中maxCapacityPerThread是可以动态配置的。如果每个线程池化的个数为0，就不需要进行池化，返回一个持有NOOP_HANDLE的对象做降级兼容（逻辑上是非池化的）。NOOP_HANDLE在回收时recycle方法里什么也不做
             return newObject((Handle<T>) NOOP_HANDLE);
         }
 
@@ -78,7 +77,7 @@ public abstract class MyRecycler<T> {
             // 调用newHandle尝试创建一个handle
             handle = localPool.newHandle();
             if (handle != null) {
-                // 获取handle句柄成功，由子类实现newObject方法创建需要池化的对象
+                // 获取handle句柄成功，由子类实现newObject方法创建需要池化的对象(比如new一个PooledHeapByteBuf对象)
                 obj = newObject(handle);
                 // 将handle句柄与创建出来的池化对象进行绑定
                 handle.set(obj);
@@ -96,7 +95,7 @@ public abstract class MyRecycler<T> {
 
     private static final class LocalPool<T> implements MessagePassingQueue.Consumer<DefaultHandle<T>>{
         /**
-         * 前LocalPool中队列所缓存的最大handle个数(有batch和pooledHandles两个队列，有并发时好像会略高于这个值)
+         * 当前LocalPool中队列所缓存的最大handle个数(有batch和pooledHandles两个队列，有并发时好像会略高于这个值)
          * */
         private final int chunkSize;
 
@@ -178,13 +177,14 @@ public abstract class MyRecycler<T> {
             // 回收时进行状态的判断，避免重复回收，提前发现bug
             handle.toAvailable();
 
+            // owner线程是持有当前localPool对象池的线程
             Thread owner = this.owner;
             if (owner != null && Thread.currentThread() == owner && batch.size() < chunkSize) {
                 // 如果是当前线程用完了进行回收，并且batch队列里缓存的池化对象数量小于chunkSize，则将其放回到LocalPool里
                 accept(handle);
             } else if (owner != null && isTerminated(owner)) {
                 // 如果持有LocalPool的线程已经被杀掉了(isTerminated)，清空当前LocalPool的pooledHandles
-                // 防止claim方法里继续去池化对象
+                // 防止claim方法里继续去获取池化对象
                 this.owner = null;
                 pooledHandles = null;
             } else {

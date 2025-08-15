@@ -166,7 +166,6 @@ public class MyPoolChunk<T> {
         runsAvailLock = null;
 //        subpages = null;
         chunkSize = size;
-//        cachedNioBuffers = null;
     }
 
     private void insertAvailRun(int runOffset, int pages, long handle) {

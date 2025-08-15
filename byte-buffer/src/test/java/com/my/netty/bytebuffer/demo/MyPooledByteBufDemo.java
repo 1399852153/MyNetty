@@ -1,10 +1,10 @@
-package com.my.netty.bytebuffer;
+package com.my.netty.bytebuffer.demo;
 
 
 import com.my.netty.bytebuffer.netty.MyByteBuf;
 import com.my.netty.bytebuffer.netty.allocator.MyPooledByteBufAllocator;
 
-public class MyPooledByteBufTest {
+public class MyPooledByteBufDemo {
 
     public static void main(String[] args) {
         MyPooledByteBufAllocator myPooledByteBufAllocator = new MyPooledByteBufAllocator();
