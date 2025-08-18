@@ -50,8 +50,8 @@ jemalloc将少数独创的理念与一些早已在其它内存分配器中得到
 接下来将一一介绍这些思想和分配的哲学，正是它们的有机结合才造就了jemalloc。
 
 #####
-* Segregate small objects according to size class, and **prefer low addresses during re-use**. This layout
-  policy originated in phkmalloc , and is the key to jemalloc's predictable low fragmentation behavior.
+* Segregate small objects according to size class, and **prefer low addresses during re-use**. 
+  This layout policy originated in phkmalloc , and is the key to jemalloc's predictable low fragmentation behavior.
 * **Carefully choose size classes** (somewhat inspired by Vam). If size classes are spaced far apart, objects will tend to have excessive unusable trailing space (internal fragmentation).  
   As the size class count increases, there will tend to be a corresponding increase in unused memory dedicated to object sizes that are currently underutilized (external fragmentation).
 * **Impose tight limits on allocator metadata overhead**. Ignoring fragmentation, jemalloc limits metadata to less than 2% of total memory usage, for all size classes.
@@ -63,22 +63,42 @@ jemalloc将少数独创的理念与一些早已在其它内存分配器中得到
   it had serious fragmentation issues for some applications, and the suggestion was put forth to include multiple allocators in the operating system,
   the notion being that developers would be empowered to make informed choices based on application characteristics. 
   The correct solution was to dramatically simplify jemalloc's layout algorithms, in order to improve both performance and predictability. 
-  Over the past year, this philosophy has motivated numerous major performance improvements in jemalloc, and it will continue to guide development as weaknesses are discovered
+  Over the past year, this philosophy has motivated numerous major performance improvements in jemalloc, and it will continue to guide development as weaknesses are discovered.
+#####
+* 按照规格等级将小对象隔离存放，并且在**重用时优先使用低地址位置的内存**。这一布局策略源于phkmalloc，同时也是jemaaloc实现可预测的低内存碎片分配的关键。
+* **精心设计规格等级**(部分灵感来自于Vam)。如果不同规格等级之间差距过大，对象尾部将会产生过多的不可使用的空间(内部碎片)。
+  而随着规格等级数量的增加(译者注：规格等级过多、排布过密)，又会导致专门服务于某一使用率较低的规格大小的内存空间闲置(外部碎片)。
+* **严格的控制分配器元数据的空间开销**。在忽略内存碎片的情况下，jemelloc限制用于管理所有规格等级的元数据使用量必须低于总内存使用的2%。
+* **最小化活动页集合**。操作系统内核以页为单位管理虚拟内存(通常一页为4Kb大小)，因此将所有的数据尽可能的集中在少数的页中是非常重要的。
+  phkmalloc在应用需要频繁将活动页交换到磁盘的时代就早已验证过了这一规则的正确性。而在如今应用彻底禁用交换机制的前提下，这一规则依然重要。
+* **优秀的设计必须足够通用**。当jemalloc被初次集成进FreeBSD操作系统时，有一些应用在使用jemalloc时遭遇了严重的内存碎片问题，有人提议操作系统应该同时包含多种不同类型的内存分配器，
+  寄希望于开发者能够基于它们的应用特性去选择最合适的内存分配器。
+  正确的解决方案是大幅的简化jemalloc的布局算法，目的是同时提升jemalloc的性能和可预测性。过去的一年中，这一设计理念推动了jemalloc实现了多个重要的性能优化，随着未来jemalloc中更多的缺陷被发现，这一思想将持续指导jemalloc的发展。
 
 #####
 Jemalloc implements three main size class categories as follows (assuming default configuration on a 64-bit system):
+#####
+以下是jemalloc在64位操作系统默认配置的三大尺寸分类：
+#####
 * **Small**: [8], [16, 32, 48, ..., 128], [192, 256, 320, ..., 512], [768, 1024, 1280, ..., 3840]
 * **Large**: [4 KiB, 8 KiB, 12 KiB, ..., 4072 KiB]
 * **Huge**: [4 MiB, 8 MiB, 12 MiB, …]
 
 #####
-Virtual memory is logically partitioned into chunks of size 2k (4 MiB by default). As a result, it is possible to find allocator metadata for small/large objects (interior pointers) in constant time via pointer manipulations, 
+Virtual memory is logically partitioned into chunks of size 2^k (4 MiB by default).
+As a result, it is possible to find allocator metadata for small/large objects (interior pointers) in constant time via pointer manipulations, 
 and to look up metadata for huge objects (chunk-aligned) in logarithmic time via a global red-black tree.
-
+#####
+虚拟内存在Chunk内按照2次幂进行逻辑分区(Chunk默认大小为4MB)。
+因此，可以通过指针运算以常数时间复杂度找到small和large对象(内部指针)的分配器元数据，并且能够通过一个全局的红黑树以对数时间复杂度查找到huge对象(基于Chunk对齐)的分配器元数据。
 #####
 Application threads are assigned arenas in round-robin fashion upon first allocating a small/large object.
 Arenas are completely independent of each other. They maintain their own chunks, from which they carve page runs for small/large objects. 
 Freed memory is always returned to the arena from which it came, regardless of which thread performs the deallocation.
+#####
+应用线程在首次分配small或large对象时，使用round-robin轮训为其分配一个arena。  
+不同的Arena彼此之间完全独立。Arena维护独属于它自己的Chunk集合，从中切割出连续的页段用于分配small或large对象。  
+内存被释放时总是被归还到其一开始所属的Arena中，而与执行deallocation释放内存的线程无关。
 
 #####
 ![Arena chunk layout.png](Arena chunk layout.png)
