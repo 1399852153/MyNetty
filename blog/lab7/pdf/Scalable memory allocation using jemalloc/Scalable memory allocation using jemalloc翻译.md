@@ -111,6 +111,13 @@ Each arena tracks non-full small object page runs via red-black trees (one for e
 and always services allocation requests using the non-full run with the lowest address for that size class.
 Each arena tracks available page runs via two red-black trees — one for clean/untouched page runs, and one for dirty/touched page runs. 
 Page runs are preferentially allocated from the dirty tree, using lowest best fit.
+#####
+每一个Arena中的chunk都包含了元数据(主要是一个页映射表)，后面接着是一个或多个连续页内存段(page runs)。    
+small规格的对象按照规格进行分组存放，在每一个内存段的开头带有额外的元数据，而large规格的对象则彼此独立存放，并且其元数据被完整的存放在chunk的头部。  
+每一个Arena通过一个红黑树来追踪每一个未满的存放small规格对象的连续页内存段(每个small规格级别都对应一个红黑树)，
+并且总是使用每个规格的未满内存段中最低的地址来满足应用程序的内存分配请求。  
+每一个Arena都通过两颗红黑树来追踪可用的连续页内存段——一个用于维护干净的/未被使用的连续页内存段，而另一个用于维护脏的/已被使用的连续页内存段。  
+优先从维护脏页的树中使用最少使用为优的策略分配连续内存段。  
 
 #####
 ![Arena and thread cache layout .png](Arena and thread cache layout.png)
@@ -119,6 +126,10 @@ Page runs are preferentially allocated from the dirty tree, using lowest best fi
 Each thread maintains a cache of small objects, as well as large objects up to a limited size (32 KiB by default).
 Thus, the vast majority of allocation requests first check for a cached available object before accessing an arena.
 Allocation via a thread cache requires no locking whatsoever, whereas allocation via an arena requires locking an arena bin (one per small size class) and/or the arena as a whole.
+#####
+每一个线程都维护了一个small对象的缓存，并且也维护了一个大小受限的large对象缓存(默认32KB)。  
+因此，绝大多数内存分配请求都会在访问Arena之前检查缓存中是否存在可用的已缓存对象。  
+通过线程缓存进行分配不需要任何的加锁操作，而通过一个Arena进行分配则需要进行加锁，small规格的分配需要锁住其中的一个小区域，而large类型的分配则可能需要锁住整个Arena。
 
 #####
 The main goal of thread caches is to reduce the volume of synchronization events.
@@ -126,5 +137,126 @@ Therefore, the maximum number of cached objects for each size class is capped at
 Higher caching limits would further speed up allocation for some applications, but at an unacceptable fragmentation cost in the general case. 
 To further limit fragmentation, thread caches perform incremental "garbage collection" (GC), where time is measured in terms of allocation requests.
 Cached objects that go unused for one or more GC passes are progressively flushed to their respective arenas using an exponential decay approach.
+#####
+引入线程缓存的主要目的是减少同步事件的量。  
+因此，缓存对象的最大数量被限制在实际上将同步事件数量减少10-100倍的量。
+更大的缓存对象的数量虽然能进一步的提升一些应用的分配速度，但是在一般情况下带来了不可接受的内存碎片开销。  
+为了进一步限制内存碎片，线程缓存执行增量的垃圾回收(GC)机制，其执行时间通过分配请求的次数来衡量。  
+采用指数衰减算法，将经历过一次或者更多次GC后依然未被使用的被缓存对象逐步的将其刷新回到对应所属的Arena中。  
+
+### Facebook-motivated innovations
+#####
+In 2009, a Facebook engineer might have summarized jemalloc's effectiveness by saying something like, 
+"jemalloc's consistency and reliability are great, but it isn't fast enough, plus we need better ways to monitor what it's actually doing."
+
+### Speed
+We addressed speed by making many improvements. Here are some of the highlights:  
+* We rewrote thread caching. Most of the improved speed came from reducing constant-factor overheads (they matter in the critical path!), 
+  but we also noticed that tighter control of cache size often improves data locality, which tends to mitigate the increased cache fill/flush costs. 
+  Therefore we chose a very simple design in terms of data structures (singly linked LIFO for each size class) and size control (hard limit for each size class, plus incremental GC completely independent of other threads).
+* We increased mutex granularity, and restructured the synchronization logic to drop all mutexes during system calls. 
+  jemalloc previously had a very simple locking strategy — one mutex per arena — 
+  but we determined that holding an arena mutex during mmap(),munmap(), or madvise() system calls had a dramatic serialization effect, especially for Linux kernels prior to 2.6.27. 
+  Therefore we demoted arena mutexes to protect all operations related to arena chunks and page runs,
+  and for each arena we added one mutex per small size class to protect data structures that are typically accessed for small allocation/deallocation. 
+  This was an insufficient remedy though, so we restructured dirty page purging facilities to drop all mutexes before calling madvise(). 
+  This change completely solved the mutex serialization problem for Linux 2.6.27 and newer.
+* We rewrote dirty page purging such that the maximum number of dirty pages is proportional to total memory usage, rather than constant. 
+  We also segregated clean and dirty unused pages, rather than coalescing them, in order to preferentially re-use dirty pages and reduce the total dirty page purging volume. 
+  Although this change somewhat increased virtual memory usage, it had a marked positive impact on throughput.
+* We developed a new red-black tree implementation that has the same low memory overhead (two pointer fields per node), but is approximately 30% faster for insertion/removal.
+  This constant-factor improvement actually mattered for one of our applications.
+  The previous implementation was based on leftleaning 2-3-4 red-black trees, and all operations were performed using only down passes.
+  While this iterative approach avoids recursion or the need for parent pointers, 
+  it requires extra tree manipulations that could be avoided if tree consistency were lazily restored during a subsequent up pass. 
+  Experiments revealed that optimal red-black tree implementations must do lazy fix-up. 
+  Furthermore, fix-up can often terminate before completing the up pass, and recursion unwinding is an unacceptable cost in such cases. 
+  We settled on a non-recursive left-leaning 2-3 red-black tree implementation that initializes an array of parent pointers during the down pass, 
+  then uses the array for lazy fix-up in the up pass, which terminates as early as possible.
+
+### Introspection
+#####
+Jemalloc has always been able to print detailed internal statistics in human-readable form at application exit,
+but this is of limited use for long-running server applications, so we exposedmalloc_stats_print() such that it can be called repeatedly by the application. 
+Unfortunately this still imposed a parsing burden on consumers, so we added the mallctl*() API, patterned after BSD's sysctl() system call,
+to provide access to individual statistics. We reimplementedmalloc_stats_print() in terms of mallctl*() in order to assure full coverage, 
+and over time we also extended this facility to provide miscellaneous controls, such as thread cache flushing and forced dirty page purging.
 
 #####
+Memory leak diagnosis poses a major challenge, especially when live production conditions are required to expose the leaks. 
+Google's tcmalloc provides an excellent heap profiling facility suitable for production use, and we have found it invaluable. 
+However, we increasingly faced a dilemma for some applications, in that only jemalloc was capable of adequately controlling memory usage, 
+but only tcmalloc provided adequate tools for understanding memory utilization. 
+Therefore, we added compatible heap profiling functionality to jemalloc. This allowed us to leverage the post-processing tools that come with tcmalloc.
+
+### Experimental
+#####
+Research and development of untried algorithms is in general a risky proposition; the majority of experiments fail.
+Indeed, a vast graveyard of failed experiments bears witness to jemalloc's past, despite its nature as a practical endeavor.
+That hasn't stopped us from continuing to try new things though.
+Specifically, we developed two innovations that have the potential for broader usefulness than our current applications.
+
+* Some of the datasets we work with are huge, far beyond what can fit in RAM on a single machine.
+  With the recent increased availability of solid state disks (SSDs), it is tempting to expand datasets to scale with SSD rather than RAM.
+  To this end we added the ability to explicitly map one or more files, rather than using anonymous mmap().
+  Our experiments thus far indicate that this is a promising approach for applications with working sets that fit in RAM, 
+  but we are still analyzing whether we can take sufficient advantage of this approach to justify the cost of SSD.
+* The venerable malloc API is quite limited: malloc(), calloc(), realloc(), andfree(). 
+  Over the years, various extensions have been bolted on, like valloc(),memalign(), posix_memalign(), recalloc(), and malloc_usable_size(), just to name a few. 
+  Of these, only posix_memalign() has been standardized, and its bolton limitations become apparent when attempting to reallocate aligned memory. 
+  Similar issues exist for various combinations of alignment, zeroing, padding, and extension/contraction with/without relocation.
+  We developed a new *allocm() API that supports all reasonable combinations. For API details, see the jemalloc manual page. 
+  We are currently using this feature for an optimized C++ string class that depends on reallocation succeeding only if it can be done in place. 
+  We also have imminent plans to use it for aligned reallocation in a hash table implementation, which will simplify the existing application logic.
+
+### Successes at Facebook
+#####
+Some of jemalloc's practical benefits for Facebook are difficult to quantify. 
+For example, we have on numerous occasions used heap profiling on production systems to diagnose memory issues before they could cause service disruptions,
+not to mention all the uses of heap profiling for development/optimization purposes. 
+More generally, jemalloc's consistent behavior has allowed us to make more accurate memory utilization projections, 
+which aids operations as well as long term infrastructure planning.
+All that said, jemalloc does have one very tangible benefit: it is fast.
+
+#####
+Memory allocator microbenchmark results are notoriously difficult to extrapolate to real-world applications (though that doesn't stop people from trying).
+Facebook devotes a significant portion of its infrastructure to machines that use HipHop to serve Web pages to users.
+Although this is just one of many ways in which jemalloc is used at Facebook, it provides a striking real-world example of how much allocator performance can matter. 
+We used a set of six identical machines, each with 8 CPU cores, to compare total server throughput. 
+The machines served similar, though not identical, requests, over the course of one hour. 
+We sampled at four-minute intervals (15 samples total), measured throughput as inversely related to CPU consumption, and computed relative averages. 
+For one machine we used the default malloc implementation that is part of glibc 2.5,
+and for the other five machines we used the LD_PRELOAD environment variable to load ptmalloc3, Hoard 3.8, concur1.0.2, tcmalloc 1.4, and jemalloc 2.1.0. 
+Note that newer versions of glibc exist (we used the default for CentOS 5.2), and that the newest version of tcmalloc is 1.6,
+but we encountered undiagnosed application instability when using versions 1.5 and 1.6.
+
+#####
+![Web server throughput.png](Web server throughput.png)
+
+#####
+Glibc derives its allocator from ptmalloc, so their performance similarity is no surprise. 
+The Hoard allocator appears to spend a great deal of time contending on a spinlock, possibly as a side effect of its blowup avoidance algorithms.
+The concur allocator appears to scale well, but it does not implement thread caching, so it incurs a substantial synchronization cost even though contention is low. 
+tcmalloc under-performs jemalloc by about 4.5%.
+
+#####
+The main point of this experiment was to show the huge impact that allocator quality can have, as in glibc versus jemalloc, 
+but we have performed numerous experiments at larger scales, using various hardware and client request loads,
+in order to quantify the performance advantage of jemalloc over tcmalloc. 
+In general we found that as the number of CPUs increases, the performance gap widens.
+We interpret this to indicate that jemalloc will continue to scale as we deploy new hardware with ever-increasing CPU core counts.
+
+
+### Future work(未来的工作)
+#####
+Jemalloc is now quite mature, but there remain known weaknesses, most of which involve how arenas are assigned to threads.
+Consider an application that launches a pool of threads to populate a large static data structure,
+then reverts to single-threaded operation for the remainder of execution.
+Unless the application takes special action to control how arenas are assigned (or simply limits the number of arenas),
+the initialization phase is apt to leave behind a wasteland of poorly utilized arenas (that is, high fragmentation).
+Workarounds exist, but we intend to address this and other issues as they arise due to unforeseen application behavior.
+
+### Acknowledgements(致谢)
+#####
+Although the vast majority of jemalloc was written by a single author, many others at Facebook,Mozilla, the FreeBSD Project, and elsewhere have contributed both directly and indirectly it its success. 
+At Facebook the following people especially stand out: Keith Adams, Andrei Alexandrescu,Jordan DeLong, Mark Rabkin, Paul Saab, and Gary Wu.
