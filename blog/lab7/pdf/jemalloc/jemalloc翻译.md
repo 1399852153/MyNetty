@@ -739,7 +739,7 @@ However, most of the statistics should have obvious meanings after having read t
 不过，绝大多数的统计指标在阅读了本文后应该是不言自明的。  
 
 #####
-![img.png](Arena chunk layout.png)
+![img.png](../Arena%20chunk%20layout.png)
 
 #####
 ![图9](Figure9.png)
