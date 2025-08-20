@@ -148,31 +148,48 @@ Cached objects that go unused for one or more GC passes are progressively flushe
 #####
 In 2009, a Facebook engineer might have summarized jemalloc's effectiveness by saying something like, 
 "jemalloc's consistency and reliability are great, but it isn't fast enough, plus we need better ways to monitor what it's actually doing."
+#####
+如果是在2009年，一个Facebook的工程师可能会这样总结jemalloc的性能，"jemalloc的有着很高的稳定性和可靠性，但是不够快，同时我们还需要更好的方式去监控其实际的行为"。
 
 ### Speed
 We addressed speed by making many improvements. Here are some of the highlights:  
-* We rewrote thread caching. Most of the improved speed came from reducing constant-factor overheads (they matter in the critical path!), 
+* **We rewrote thread caching**. Most of the improved speed came from reducing constant-factor overheads (they matter in the critical path!), 
   but we also noticed that tighter control of cache size often improves data locality, which tends to mitigate the increased cache fill/flush costs. 
   Therefore we chose a very simple design in terms of data structures (singly linked LIFO for each size class) and size control (hard limit for each size class, plus incremental GC completely independent of other threads).
-* We increased mutex granularity, and restructured the synchronization logic to drop all mutexes during system calls. 
+* **We increased mutex granularity**, and restructured the synchronization logic to drop all mutexes during system calls. 
   jemalloc previously had a very simple locking strategy — one mutex per arena — 
   but we determined that holding an arena mutex during mmap(),munmap(), or madvise() system calls had a dramatic serialization effect, especially for Linux kernels prior to 2.6.27. 
   Therefore we demoted arena mutexes to protect all operations related to arena chunks and page runs,
   and for each arena we added one mutex per small size class to protect data structures that are typically accessed for small allocation/deallocation. 
   This was an insufficient remedy though, so we restructured dirty page purging facilities to drop all mutexes before calling madvise(). 
   This change completely solved the mutex serialization problem for Linux 2.6.27 and newer.
-* We rewrote dirty page purging such that the maximum number of dirty pages is proportional to total memory usage, rather than constant. 
+* We **rewrote dirty page purging** such that the maximum number of dirty pages is proportional to total memory usage, rather than constant. 
   We also segregated clean and dirty unused pages, rather than coalescing them, in order to preferentially re-use dirty pages and reduce the total dirty page purging volume. 
   Although this change somewhat increased virtual memory usage, it had a marked positive impact on throughput.
-* We developed a new red-black tree implementation that has the same low memory overhead (two pointer fields per node), but is approximately 30% faster for insertion/removal.
+* We **developed a new red-black tree implementation** that has the same low memory overhead (two pointer fields per node), but is approximately 30% faster for insertion/removal.
   This constant-factor improvement actually mattered for one of our applications.
-  The previous implementation was based on leftleaning 2-3-4 red-black trees, and all operations were performed using only down passes.
+  The previous implementation was based on left-leaning 2-3-4 red-black trees, and all operations were performed using only down passes.
   While this iterative approach avoids recursion or the need for parent pointers, 
   it requires extra tree manipulations that could be avoided if tree consistency were lazily restored during a subsequent up pass. 
   Experiments revealed that optimal red-black tree implementations must do lazy fix-up. 
   Furthermore, fix-up can often terminate before completing the up pass, and recursion unwinding is an unacceptable cost in such cases. 
   We settled on a non-recursive left-leaning 2-3 red-black tree implementation that initializes an array of parent pointers during the down pass, 
   then uses the array for lazy fix-up in the up pass, which terminates as early as possible.
+#####
+我们通过许多改进措施提高了jemalloc的速度。以下是部分重点的措施：
+* 我们**重写了线程缓存**。绝大多数性能的提升来自于减少常量级的性能开销(这对性能提升非常重要!),同时我们也注意到更严格的控制缓存的规格通常能改善数据的(CPU缓存)局部性,从而有效抵消缓存填充与刷新成本的增加而带来的影响。  
+  因此我们选择了极其简单的数据结构设计(为每一个规格级别构建一个后进先出(LIFO)的链表)，与规模控制方式(严格的限制每一个规格，并配合完全独立于其它线程的渐进式的GC)。
+* 我们通过**提高互斥锁的粒度**，并且重构了同步逻辑以实现在系统调用期间释放所有的互斥锁。jemelloc在此之前有一个非常简单的加锁策略——为每一个Arena分配一个互斥锁
+  但是我们发现在执行mmap()、munmap()或madvise()等系统调用期间持有Arena的互斥锁会产生严重的序列化问题，在2.6.27版本之前的Linux内核中尤其严重。  
+  因此我们将Arena级别的互斥锁降级为仅保护关于Chunk和连续页内存段的操作，同时为Arena中的每一个small规格增加一个独立的互斥锁，以保护频繁进行的small规格分配/释放的数据结构。  
+  然而这一改进并不充分，因此我们重构了脏页的清理机制，以实现在调用madvise()之前释放所有的互斥锁。这一改进彻底解决了Linux 2.6.27及更高版本的互斥锁的序列化问题。
+* 我们**重写了脏页清理机制**，使得脏页的最大数量与最大的内存使用量成正比，而非之前的固定值。  
+  我们将干净的页与未使用的脏页进行了分离，而不是将它们合并，从而做到优先重用脏页并降低脏页清理的总量。尽管这项改动略微的增加了虚拟内存的使用量，但却显著提高了吞吐量。
+* 我们**发明了一个新的红黑树实现方式**，(与之前的实现相比)其在保持同等的低内存开销的同时(每个节点仅需两个指针变量)，插入和删除操作的性能却快了大约30%。这一常量级的优化对我们的一个应用带来了实实在在的提升。  
+  之前的实现基于左倾的2-3-4红黑树，并且所有的操作都只通过下行遍历(down passes)完成。  
+  虽然这种迭代方式避免了递归或需要其双亲指针，但它需要进行额外的树结构调整，如果采用后续上行遍历(up pass)进行延迟的一致性恢复则可以避免这一额外的树结构调整。实验表明，最优的红黑树实现必须采用延迟修复机制(lazy fix-up).
+  另外，修复过程可以在上行遍历完成前结束，并且递归展开在这种情况下的开销大到无法接受。  
+  最终我们确定了非递归的左倾2-3红黑树的实现方案，在下行遍历期间初始化其双亲节点数组，随后利用该数组在上行遍历中进行延迟的修复，并尽可能早的结束修复流程。
 
 ### Introspection
 #####
