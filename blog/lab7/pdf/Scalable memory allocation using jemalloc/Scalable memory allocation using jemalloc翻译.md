@@ -191,13 +191,17 @@ We addressed speed by making many improvements. Here are some of the highlights:
   另外，修复过程可以在上行遍历完成前结束，并且递归展开在这种情况下的开销大到无法接受。  
   最终我们确定了非递归的左倾2-3红黑树的实现方案，在下行遍历期间初始化其双亲节点数组，随后利用该数组在上行遍历中进行延迟的修复，并尽可能早的结束修复流程。
 
-### Introspection
+### Introspection(反省)
 #####
 Jemalloc has always been able to print detailed internal statistics in human-readable form at application exit,
-but this is of limited use for long-running server applications, so we exposedmalloc_stats_print() such that it can be called repeatedly by the application. 
-Unfortunately this still imposed a parsing burden on consumers, so we added the mallctl*() API, patterned after BSD's sysctl() system call,
-to provide access to individual statistics. We reimplementedmalloc_stats_print() in terms of mallctl*() in order to assure full coverage, 
+but this is of limited use for long-running server applications, so we exposed malloc_stats_print() such that it can be called repeatedly by the application. 
+Unfortunately this still imposed a parsing burden on consumers, so we added the mallctl*() API, patterned after BSD's sysctl() system call, to provide access to individual statistics. 
+We reimplemented malloc_stats_print() in terms of mallctl*() in order to assure full coverage, 
 and over time we also extended this facility to provide miscellaneous controls, such as thread cache flushing and forced dirty page purging.
+#####
+jemalloc总是能够在应用程序退出时以人类可读的格式打印内部的统计详情，但对于长时间运行的服务器应用程序作用有限，所以我们暴露了malloc_stats_print()接口，其允许应用程序反复调用。  
+不幸的是，这依然需要消费者承担解析的负担，所以我们参考BSD的sysctl()这一系统调用而增加了mallctl*()这一API，以提供访问单独统计信息的能力。  
+为了确保完全的覆盖，我们基于mallctl*()重新实现了malloc_stats_print()，并且我们也逐步的拓展这一功能以提供各种各样的控制能力，例如线程缓存的刷新以及强制的脏页清理。
 
 #####
 Memory leak diagnosis poses a major challenge, especially when live production conditions are required to expose the leaks. 
@@ -205,26 +209,43 @@ Google's tcmalloc provides an excellent heap profiling facility suitable for pro
 However, we increasingly faced a dilemma for some applications, in that only jemalloc was capable of adequately controlling memory usage, 
 but only tcmalloc provided adequate tools for understanding memory utilization. 
 Therefore, we added compatible heap profiling functionality to jemalloc. This allowed us to leverage the post-processing tools that come with tcmalloc.
+#####
+内存泄露诊断构成了巨大的挑战，特别是只有生产条件下才能暴露的泄露场景。  
+Google的tcmalloc提供了非常优秀的适用于生产环境的堆内存分析工具，其价值已经得到了我们的验证。  
+然而，我们日益面临了一个两难的困境，对于一些应用只有使用jemalloc才有能力充分的控制其内存使用量，但只有tcmalloc提供了完善的工具内存分析工具。  
+因此，我们为jemalloc增加了兼容tcmalloc的堆内存分析工具。这使得我们能够继续使用tcmalloc中的后续处理工具。
 
-### Experimental
+### Experimental(实验性的)
 #####
 Research and development of untried algorithms is in general a risky proposition; the majority of experiments fail.
 Indeed, a vast graveyard of failed experiments bears witness to jemalloc's past, despite its nature as a practical endeavor.
 That hasn't stopped us from continuing to try new things though.
 Specifically, we developed two innovations that have the potential for broader usefulness than our current applications.
-
 * Some of the datasets we work with are huge, far beyond what can fit in RAM on a single machine.
   With the recent increased availability of solid state disks (SSDs), it is tempting to expand datasets to scale with SSD rather than RAM.
   To this end we added the ability to explicitly map one or more files, rather than using anonymous mmap().
   Our experiments thus far indicate that this is a promising approach for applications with working sets that fit in RAM, 
   but we are still analyzing whether we can take sufficient advantage of this approach to justify the cost of SSD.
-* The venerable malloc API is quite limited: malloc(), calloc(), realloc(), andfree(). 
+* The venerable malloc API is quite limited: malloc(), calloc(), realloc(), and free(). 
   Over the years, various extensions have been bolted on, like valloc(),memalign(), posix_memalign(), recalloc(), and malloc_usable_size(), just to name a few. 
   Of these, only posix_memalign() has been standardized, and its bolton limitations become apparent when attempting to reallocate aligned memory. 
   Similar issues exist for various combinations of alignment, zeroing, padding, and extension/contraction with/without relocation.
   We developed a new *allocm() API that supports all reasonable combinations. For API details, see the jemalloc manual page. 
   We are currently using this feature for an optimized C++ string class that depends on reallocation succeeding only if it can be done in place. 
   We also have imminent plans to use it for aligned reallocation in a hash table implementation, which will simplify the existing application logic.
+#####
+研究和发展未经验证的算法通常是一个有风险的提议；大多数实验都以失败告终。  
+尽管jemalloc从本质上来说是一项注重实践的尝试，但其发展历程中由无数失败尝试所构成的庞大"墓地"正是这一事实的见证。但这并未令我们停止不断尝试新事物的步伐。
+具体来说，我们发明了两个创新性的技术，其潜在的应用范围远超我们目前的应用。
+* 我们所处理的一些数据集非常庞大，其规模远超单台机器的RAM大小。随着固态硬盘(SSD)的不断普及，可以考虑使用SSD来代替RAM以拓展所处理数据集的规模。  
+  为此，我们增加了一个显式映射一个或多个文件的功能，以代替匿名的mmap()。  
+  截止目前，我们的实验表明对于RAM可以容纳工作集的应用，这是一条有很好发展前景的技术路线，但我们依然在分析其是否带来了足够的优势以抵消使用SSD(而非RAM)的开销。
+* 传统的malloc API功能非常有限：仅有malloc(), calloc(), realloc(),和free().
+  这些年来，业界不断地打各种补丁以拓展其能力，包括但不限于valloc(),memalign(), posix_memalign(), recalloc()和malloc_usable_size()。  
+  这些拓展中仅有posix_memalign()被标准化了，但当重新分配对齐的内存时，这种补丁式的局限性便暴露无遗。类似的问题也存在于对齐，归零，填充以及拓展/收缩(重定位/非重定位)等各种功能组合使用的场景。  
+  为此，我们开发了一套全新的*allocm() API以支持所有合理的功能组合。API的详情可以参考jemalloc的使用手册。  
+  我们正在使用这一特性来优化C++的String类，String类要求仅就地完成重分配才成功。
+  我们也计划近期在hash table的实现中使用这一全新的API来完成对齐内存的重分配，这将简化已有的应用逻辑。
 
 ### Successes at Facebook
 #####
