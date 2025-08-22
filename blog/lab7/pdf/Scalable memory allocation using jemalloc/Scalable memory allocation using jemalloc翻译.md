@@ -247,7 +247,7 @@ Specifically, we developed two innovations that have the potential for broader u
   我们正在使用这一特性来优化C++的String类，String类要求仅就地完成重分配才成功。
   我们也计划近期在hash table的实现中使用这一全新的API来完成对齐内存的重分配，这将简化已有的应用逻辑。
 
-### Successes at Facebook
+### Successes at Facebook(Facebook的成功案例)
 #####
 Some of jemalloc's practical benefits for Facebook are difficult to quantify. 
 For example, we have on numerous occasions used heap profiling on production systems to diagnose memory issues before they could cause service disruptions,
@@ -255,6 +255,11 @@ not to mention all the uses of heap profiling for development/optimization purpo
 More generally, jemalloc's consistent behavior has allowed us to make more accurate memory utilization projections, 
 which aids operations as well as long term infrastructure planning.
 All that said, jemalloc does have one very tangible benefit: it is fast.
+#####
+jemalloc给Facebook带来的一些实质性收益难以完全量化。
+例如，我们曾多次在生产环境的系统中使用堆内存分析来诊断内存问题，从而避免该问题导致服务中断，更不用说在使用堆内存分析来开发或优化应用。  
+总的来说，因为jemalloc其高一致的行为使得我们能够更加准确的预测内存的使用率，这对运营和长期的基础设施计划都很有利。  
+除此之外，jemalloc最实实在在的一个优势就是：它很快。
 
 #####
 Memory allocator microbenchmark results are notoriously difficult to extrapolate to real-world applications (though that doesn't stop people from trying).
@@ -267,6 +272,15 @@ For one machine we used the default malloc implementation that is part of glibc 
 and for the other five machines we used the LD_PRELOAD environment variable to load ptmalloc3, Hoard 3.8, concur1.0.2, tcmalloc 1.4, and jemalloc 2.1.0. 
 Note that newer versions of glibc exist (we used the default for CentOS 5.2), and that the newest version of tcmalloc is 1.6,
 but we encountered undiagnosed application instability when using versions 1.5 and 1.6.
+#####
+内存分配器的微基准测试的结果通常难以有效指导真实世界中的应用程序(尽管从未阻止人们去尝试)。
+Facebook投入了很大一部分的基础设施资源给使用HipHop技术向用户提供网页服务的机器。
+尽管这只是jemalloc在Facebook的多种应用场景之一，但它作为一个来自真实世界的例证，充分展示了分配器性能产生的关键影响。
+我们使用了6台配置完全相同的机器，每台都拥有8核的CPU，进行服务器总吞吐量的对比。
+这些机器在一个小时内处理了相似但并不完全相同的请求。
+我们以4分钟为间隔进行采样(共15个样本)，通过CPU开销的逆相关性来衡量吞吐量，以及计算相对的平均值。  
+其中一台机器使用glibc2.5默认的malloc实现，其它五台机器则通过使用LD_PRELOAD环境变量分别加载ptmalloc3、Hoard 3.8、concur1.0.2、tcmalloc 1.4和jemalloc 2.1.0。
+注意到，虽然已经有更新版本的glibc(我们使用CentOS 5.2的默认版本)，并且最新版本的tcmalloc是1.6，但由于使用1.5和1.6版本时出现无法诊断的应用稳定性问题，所以均使用了较低的版本。
 
 #####
 ![Web server throughput.png](Web server throughput.png)
@@ -276,6 +290,12 @@ Glibc derives its allocator from ptmalloc, so their performance similarity is no
 The Hoard allocator appears to spend a great deal of time contending on a spinlock, possibly as a side effect of its blowup avoidance algorithms.
 The concur allocator appears to scale well, but it does not implement thread caching, so it incurs a substantial synchronization cost even though contention is low. 
 tcmalloc under-performs jemalloc by about 4.5%.
+#####
+Glibc的内存分配器源自ptmalloc，所以两者性能相似并不令人感到意外。 
+Hoard分配器似乎花费了大量时间在自旋锁的竞争上，这可能是其防膨胀算法的副作用。  
+Concur分配器虽然表现出良好的扩展性，但由于未实现线程缓存功能，即便竞争程度较低仍会产生显著的同步开销。  
+而tcmalloc的性能表现较jemalloc低约4.5%。  
+
 
 #####
 The main point of this experiment was to show the huge impact that allocator quality can have, as in glibc versus jemalloc, 
@@ -283,7 +303,11 @@ but we have performed numerous experiments at larger scales, using various hardw
 in order to quantify the performance advantage of jemalloc over tcmalloc. 
 In general we found that as the number of CPUs increases, the performance gap widens.
 We interpret this to indicate that jemalloc will continue to scale as we deploy new hardware with ever-increasing CPU core counts.
-
+#####
+本实验的主要目的在于展示分配器质量所能产生的巨大影响，正如glibc与jemalloc的对比所示，  
+但我们还开展了几次更大规模的实验，采用不同硬件配置和客户端请求负载，以量化jemalloc相对于tcmalloc的性能优势。  
+总的来说：随着CPU数量的增加，jemelloc相比tcmalloc的性能差距会持续增加。
+基于此，我们认为随着未来部署拥有更多CPU核心的新硬件，jemalloc仍能保持非常优秀的扩展性。
 
 ### Future work(未来的工作)
 #####
@@ -293,8 +317,15 @@ then reverts to single-threaded operation for the remainder of execution.
 Unless the application takes special action to control how arenas are assigned (or simply limits the number of arenas),
 the initialization phase is apt to leave behind a wasteland of poorly utilized arenas (that is, high fragmentation).
 Workarounds exist, but we intend to address this and other issues as they arise due to unforeseen application behavior.
+#####
+jemalloc目前已经相当成熟，但还存在一些已知的缺陷，其中多数都涉及arena与线程的绑定机制。  
+假设某个应用程序启动线程池来填充一个大型的静态数据结构，然后再剩余执行时间内恢复到单线程运行模式。  
+除非应用程序采用特殊的动作来控制arena的分配(或者简单的限制arena的数量)，否则在初始化阶段可能留下大量利用率低下的arena(这就是高度的碎片化)。
+现有的应对方案虽能缓解此问题，但我们计划从根本上解决这一缺陷及其他因不可预见的应用行为所引发的问题。
 
 ### Acknowledgements(致谢)
 #####
 Although the vast majority of jemalloc was written by a single author, many others at Facebook,Mozilla, the FreeBSD Project, and elsewhere have contributed both directly and indirectly it its success. 
 At Facebook the following people especially stand out: Keith Adams, Andrei Alexandrescu,Jordan DeLong, Mark Rabkin, Paul Saab, and Gary Wu.
+#####
+翻译：略
