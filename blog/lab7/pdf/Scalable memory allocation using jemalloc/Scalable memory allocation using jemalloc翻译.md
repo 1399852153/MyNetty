@@ -16,14 +16,14 @@ This environment poses some serious challenges for memory allocation, in particu
   But even then, dynamic input can cause unexpected memory usage spikes that can only be characterized by analyzing behavior under production loads.
 #####
 Facebook网站由一系列不同的服务端应用程序构成，其中绝大多数应用程序都运行在有着至少8个核心CPU并且大于等于8GB内存的专用机器上。  
-这些应用程序通常使用POSIX线程进行并发的计算，目的是通过最大限度的使用CPU和RAM内存以达到最大的吞吐量。  
+这些应用程序通常使用POSIX线程进行并发计算，目的是通过充分使用CPU和RAM内存以达到最大的吞吐量。  
 这种环境对内存分配带来了一些严峻的挑战，特别是：
 #####
-* 内存的分配与释放必须够快。理想情况下，应用在稳定状态下应该只进行少量的内存分配，但因为要处理基于动态输入而构建的大型动态数据结构，因此实际情况与理想情况相差甚远。  
-  即使对内存分配器进行一点微小的改变，也会对内存分配的吞吐量产生重大影响。
-* 实际用户使用的内存与RAM的使用量之间的关系必须保持一致。换句话说，限制分配器实际所产生的内存碎片大小是至关重要的。  
+* 内存的分配与释放必须够快。理想情况下，应用在稳定状态下应该只进行少量的内存分配，但因为要处理基于动态输入而构建的大型动态数据结构，所以实际上与理想情况相差甚远。  
+  即使只对内存分配器进行一点微小的改变，也会对内存分配的吞吐量产生巨大的影响。
+* 实际使用的内存与RAM的使用量之间的关系必须保持一致。换句话说，限制分配器实际所产生的内存碎片大小是至关重要的。  
   试想，如果内存分配所产生的内存碎片每天增长1GB，那么一个在设计时只预留了少量冗余内存空间的应用程序将在几天内崩溃。  
-* 堆内存分析是一个非常关键的运维辅助工具。理论上，内存泄漏的探测与修复应该是一项在开发阶段完成的任务。  
+* 堆内存分析是一个非常关键的运维辅助工具。理论上，内存泄漏的探测与修复应该是一项在开发阶段就完成的任务。  
   但即便如此，动态的输入依然会造成内存使用量预期外的激增，只有分析生产负载下的实际应用行为才能准确解决相关的内存泄漏问题。
 
 #####
@@ -43,11 +43,11 @@ While the API is simple, high concurrent throughput and fragmentation avoidance 
 jemalloc combines a few original ideas with a rather larger set of ideas that were first validated in other allocators.   
 Following is a mix of those ideas and allocation philosophy, which combined to form jemalloc.  
 #####
-C和C++语言依赖于一个非常基础的无类型的分配器API，其主要包含了5个函数：malloc(), posix_memalign(), calloc(), realloc(), andfree()。
-很多malloc的实现也提供了基本的内省能力，例如malloc_usable_size()。  
-虽然API使用上很简单，但为了实现高的并发吞吐量和尽可能的避免内存碎片，malloc其内部的实现是非常复杂的。  
-jemalloc将少数独创的理念与一些早已在其它内存分配器中得到验证的理念结合了起来。
-接下来将一一介绍这些思想和分配的哲学，正是它们的有机结合才造就了jemalloc。
+C和C++语言依赖于一个非常基础的无类型的分配器API，其主要包含了5个函数：malloc(), posix_memalign(), calloc(), realloc(), andfree()。  
+很多malloc的实现也提供了基本的内省能力，例如malloc_usable_size()。   
+虽然API使用上很简单，但为了实现高的并发吞吐量和尽可能的避免内存碎片，malloc其内部的实现非常复杂。   
+jemalloc将少数独创的理念与一些早已在其它内存分配器中得到验证的理念结合了起来。  
+接下来将一一介绍这些思想和分配的哲学，正是它们的有机结合才造就了jemalloc。 
 
 #####
 * Segregate small objects according to size class, and **prefer low addresses during re-use**. 
@@ -65,15 +65,14 @@ jemalloc将少数独创的理念与一些早已在其它内存分配器中得到
   The correct solution was to dramatically simplify jemalloc's layout algorithms, in order to improve both performance and predictability. 
   Over the past year, this philosophy has motivated numerous major performance improvements in jemalloc, and it will continue to guide development as weaknesses are discovered.
 #####
-* 按照规格等级将小对象隔离存放，并且在**重用时优先使用低地址位置的内存**。这一布局策略源于phkmalloc，同时也是jemaaloc实现可预测的低内存碎片分配的关键。
-* **精心设计规格等级**(部分灵感来自于Vam)。如果不同规格等级之间差距过大，对象尾部将会产生过多的不可使用的空间(内部碎片)。
-  而随着规格等级数量的增加(译者注：规格等级过多、排布过密)，又会导致专门服务于某一使用率较低的规格大小的内存空间闲置(外部碎片)。
+* 按照规格等级将小对象隔离存放，并且在**重用时优先使用低地址位置的内存**。这一布局策略源于phkmalloc，同时也是jemaaloc实现可预测的低内存碎片分配的关键。  
+* **精心设计规格等级**(部分灵感来自于Vam)。如果不同规格等级之间差距过大，对象尾部将会产生过多的不可使用的空间(内部碎片)。  
+  而随着规格等级数量的增加，又会导致专门服务于某一使用率较低的规格大小的内存空间闲置(外部碎片)。
 * **严格的控制分配器元数据的空间开销**。在忽略内存碎片的情况下，jemelloc限制用于管理所有规格等级的元数据使用量必须低于总内存使用的2%。
-* **最小化活动页集合**。操作系统内核以页为单位管理虚拟内存(通常一页为4Kb大小)，因此将所有的数据尽可能的集中在少数的页中是非常重要的。
+* **最小化活动页集合**。操作系统内核以页为单位管理虚拟内存(通常一页为4Kb大小)，因此将所有的数据尽可能的集中在少数的页中是非常重要的。  
   phkmalloc在应用需要频繁将活动页交换到磁盘的时代就早已验证过了这一规则的正确性。而在如今应用彻底禁用交换机制的前提下，这一规则依然重要。
-* **优秀的设计必须足够通用**。当jemalloc被初次集成进FreeBSD操作系统时，有一些应用在使用jemalloc时遭遇了严重的内存碎片问题，有人提议操作系统应该同时包含多种不同类型的内存分配器，
-  寄希望于开发者能够基于它们的应用特性去选择最合适的内存分配器。
-  正确的解决方案是大幅的简化jemalloc的布局算法，目的是同时提升jemalloc的性能和可预测性。过去的一年中，这一设计理念推动了jemalloc实现了多个重要的性能优化，随着未来jemalloc中更多的缺陷被发现，这一思想将持续指导jemalloc的发展。
+* **优秀的设计必须足够通用**。当jemalloc被初次集成进FreeBSD操作系统时，有一些应用在使用jemalloc时遭遇了严重的内存碎片问题，有人提议操作系统应该同时包含多种不同类型的内存分配器，寄希望于开发者能够基于它们的应用特性去选择最合适的内存分配器。  
+  正确的解决方案是大幅的简化jemalloc的布局算法，目的是同时提升jemalloc的性能和可预测性。过去的一年中，这一设计理念推动了jemalloc实现了多个重要的性能优化，随着未来jemalloc中更多的缺陷被发现，这一思想仍将持续指导jemalloc的发展。
 
 #####
 Jemalloc implements three main size class categories as follows (assuming default configuration on a 64-bit system):
@@ -89,14 +88,14 @@ Virtual memory is logically partitioned into chunks of size 2^k (4 MiB by defaul
 As a result, it is possible to find allocator metadata for small/large objects (interior pointers) in constant time via pointer manipulations, 
 and to look up metadata for huge objects (chunk-aligned) in logarithmic time via a global red-black tree.
 #####
-虚拟内存在Chunk内按照2次幂进行逻辑分区(Chunk默认大小为4MB)。
+虚拟内存在Chunk内按照2次幂进行逻辑分区(Chunk默认大小为4MB)。  
 因此，可以通过指针运算以常数时间复杂度找到small和large对象(内部指针)的分配器元数据，并且能够通过一个全局的红黑树以对数时间复杂度查找到huge对象(基于Chunk对齐)的分配器元数据。
 #####
 Application threads are assigned arenas in round-robin fashion upon first allocating a small/large object.
 Arenas are completely independent of each other. They maintain their own chunks, from which they carve page runs for small/large objects. 
 Freed memory is always returned to the arena from which it came, regardless of which thread performs the deallocation.
 #####
-应用线程在首次分配small或large对象时，使用round-robin轮训为其分配一个arena。  
+应用线程在首次分配small或large对象时，使用round-robin轮训为其分配一个arena。   
 不同的Arena彼此之间完全独立。Arena维护独属于它自己的Chunk集合，从中切割出连续的页段用于分配small或large对象。  
 内存被释放时总是被归还到其一开始所属的Arena中，而与执行deallocation释放内存的线程无关。
 
@@ -114,8 +113,8 @@ Page runs are preferentially allocated from the dirty tree, using lowest best fi
 #####
 每一个Arena中的chunk都包含了元数据(主要是一个页映射表)，后面接着是一个或多个连续页内存段(page runs)。    
 small规格的对象按照规格进行分组存放，在每一个内存段的开头带有额外的元数据，而large规格的对象则彼此独立存放，并且其元数据被完整的存放在chunk的头部。  
-每一个Arena通过一个红黑树来追踪每一个未满的存放small规格对象的连续页内存段(每个small规格级别都对应一个红黑树)，
-并且总是使用每个规格的未满内存段中最低的地址来满足应用程序的内存分配请求。  
+每一个Arena通过一个红黑树来追踪每一个未满的存放small规格对象的连续页内存段(每个small规格级别都对应一个红黑树)，  
+并且总是使用每个规格的未满内存段中最低的地址来满足应用程序的内存分配请求。    
 每一个Arena都通过两颗红黑树来追踪可用的连续页内存段——一个用于维护干净的/未被使用的连续页内存段，而另一个用于维护脏的/已被使用的连续页内存段。  
 优先从维护脏页的树中使用最少使用为优的策略分配连续内存段。  
 
@@ -129,7 +128,7 @@ Allocation via a thread cache requires no locking whatsoever, whereas allocation
 #####
 每一个线程都维护了一个small对象的缓存，并且也维护了一个大小受限的large对象缓存(默认32KB)。  
 因此，绝大多数内存分配请求都会在访问Arena之前检查缓存中是否存在可用的已缓存对象。  
-通过线程缓存进行分配不需要任何的加锁操作，而通过一个Arena进行分配则需要进行加锁，small规格的分配需要锁住其中的一个小区域，而large类型的分配则可能需要锁住整个Arena。
+通过线程缓存进行分配不需要任何的加锁操作，而通过一个Arena进行分配则需要进行加锁，small规格的分配需要锁住其中的一个小区域，而large类型的分配则可能需要锁住整个Arena。  
 
 #####
 The main goal of thread caches is to reduce the volume of synchronization events.
@@ -139,10 +138,10 @@ To further limit fragmentation, thread caches perform incremental "garbage colle
 Cached objects that go unused for one or more GC passes are progressively flushed to their respective arenas using an exponential decay approach.
 #####
 引入线程缓存的主要目的是减少同步事件的量。  
-因此，缓存对象的最大数量被限制在实际上将同步事件数量减少10-100倍的量。
-更大的缓存对象的数量虽然能进一步的提升一些应用的分配速度，但是在一般情况下带来了不可接受的内存碎片开销。  
-为了进一步限制内存碎片，线程缓存执行增量的垃圾回收(GC)机制，其执行时间通过分配请求的次数来衡量。  
-采用指数衰减算法，将经历过一次或者更多次GC后依然未被使用的被缓存对象逐步的将其刷新回到对应所属的Arena中。  
+因此，缓存对象的最大数量被限制在实际上将同步事件数量减少10-100倍的量。  
+更大的缓存对象数量虽然能进一步的提升一些应用的分配速度，但是在正常情况下带来了不可接受的内存碎片开销。   
+为了进一步限制内存碎片，线程缓存执行增量的垃圾回收(GC)机制，其执行时间通过分配请求的次数来衡量。   
+采用指数衰减算法，将经历过一次或者更多次GC后依然未被使用的被缓存对象逐步的将其刷新回到对应所属的Arena中。   
 
 ### Facebook-motivated innovations
 #####
@@ -179,17 +178,17 @@ We addressed speed by making many improvements. Here are some of the highlights:
 我们通过许多改进措施提高了jemalloc的速度。以下是部分重点的措施：
 * 我们**重写了线程缓存**。绝大多数性能的提升来自于减少常量级的性能开销(这对性能提升非常重要!),同时我们也注意到更严格的控制缓存的规格通常能改善数据的(CPU缓存)局部性,从而有效抵消缓存填充与刷新成本的增加而带来的影响。  
   因此我们选择了极其简单的数据结构设计(为每一个规格级别构建一个后进先出(LIFO)的链表)，与规模控制方式(严格的限制每一个规格，并配合完全独立于其它线程的渐进式的GC)。
-* 我们通过**提高互斥锁的粒度**，并且重构了同步逻辑以实现在系统调用期间释放所有的互斥锁。jemelloc在此之前有一个非常简单的加锁策略——为每一个Arena分配一个互斥锁
+* 我们通过**提高互斥锁的粒度**，并且重构了同步逻辑以实现在系统调用期间释放所有的互斥锁。jemelloc在此之前有一个非常简单的加锁策略——为每一个Arena分配一个互斥锁  
   但是我们发现在执行mmap()、munmap()或madvise()等系统调用期间持有Arena的互斥锁会产生严重的序列化问题，在2.6.27版本之前的Linux内核中尤其严重。  
-  因此我们将Arena级别的互斥锁降级为仅保护关于Chunk和连续页内存段的操作，同时为Arena中的每一个small规格增加一个独立的互斥锁，以保护频繁进行的small规格分配/释放的数据结构。  
+  因此我们将Arena级别的互斥锁降级为仅保护关于Chunk和连续页内存段的操作，同时为Arena中的每一个small规格增加一个独立的互斥锁，以保护频繁进行的small规格分配/释放的数据结构。   
   然而这一改进并不充分，因此我们重构了脏页的清理机制，以实现在调用madvise()之前释放所有的互斥锁。这一改进彻底解决了Linux 2.6.27及更高版本的互斥锁的序列化问题。
 * 我们**重写了脏页清理机制**，使得脏页的最大数量与最大的内存使用量成正比，而非之前的固定值。  
-  我们将干净的页与未使用的脏页进行了分离，而不是将它们合并，从而做到优先重用脏页并降低脏页清理的总量。尽管这项改动略微的增加了虚拟内存的使用量，但却显著提高了吞吐量。
+  我们将干净的页与未使用的脏页进行了分离，而不是将它们合并，从而做到优先重用脏页并降低脏页清理的总量。尽管这项改动略微的增加了虚拟内存的使用量，但却显著提高了吞吐量。  
 * 我们**发明了一个新的红黑树实现方式**，(与之前的实现相比)其在保持同等的低内存开销的同时(每个节点仅需两个指针变量)，插入和删除操作的性能却快了大约30%。这一常量级的优化对我们的一个应用带来了实实在在的提升。  
-  之前的实现基于左倾的2-3-4红黑树，并且所有的操作都只通过下行遍历(down passes)完成。  
+  之前的实现基于左倾2-3-4红黑树，并且所有的操作都只通过下行遍历(down passes)完成。  
   虽然这种迭代方式避免了递归或需要其双亲指针，但它需要进行额外的树结构调整，如果采用后续上行遍历(up pass)进行延迟的一致性恢复则可以避免这一额外的树结构调整。实验表明，最优的红黑树实现必须采用延迟修复机制(lazy fix-up).
   另外，修复过程可以在上行遍历完成前结束，并且递归展开在这种情况下的开销大到无法接受。  
-  最终我们确定了非递归的左倾2-3红黑树的实现方案，在下行遍历期间初始化其双亲节点数组，随后利用该数组在上行遍历中进行延迟的修复，并尽可能早的结束修复流程。
+  最终我们确定了非递归的左倾2-3红黑树实现方案，在下行遍历期间初始化其双亲节点数组，随后利用该数组在上行遍历中进行延迟的修复，并尽可能早的结束修复流程。
 
 ### Introspection(反省)
 #####
@@ -212,8 +211,8 @@ Therefore, we added compatible heap profiling functionality to jemalloc. This al
 #####
 内存泄露诊断构成了巨大的挑战，特别是只有生产条件下才能暴露的泄露场景。  
 Google的tcmalloc提供了非常优秀的适用于生产环境的堆内存分析工具，其价值已经得到了我们的验证。  
-然而，我们日益面临了一个两难的困境，对于一些应用只有使用jemalloc才有能力充分的控制其内存使用量，但只有tcmalloc提供了完善的工具内存分析工具。  
-因此，我们为jemalloc增加了兼容tcmalloc的堆内存分析工具。这使得我们能够继续使用tcmalloc中的后续处理工具。
+然而，我们日益面临了一个两难的困境，对于一些应用其只有使用jemalloc才有能力充分的控制其内存使用量，但只有tcmalloc提供了完善的工具内存分析工具。  
+因此，我们为jemalloc增加了兼容tcmalloc的堆内存分析工具。这使得我们能够继续使用tcmalloc中的后续阶段处理工具。
 
 ### Experimental(实验性的)
 #####
@@ -236,16 +235,16 @@ Specifically, we developed two innovations that have the potential for broader u
 #####
 研究和发展未经验证的算法通常是一个有风险的提议；大多数实验都以失败告终。  
 尽管jemalloc从本质上来说是一项注重实践的尝试，但其发展历程中由无数失败尝试所构成的庞大"墓地"正是这一事实的见证。但这并未令我们停止不断尝试新事物的步伐。
-具体来说，我们发明了两个创新性的技术，其潜在的应用范围远超我们目前的应用。
+具体来说，我们发明了两个创新性的技术，其潜在的使用范围远超我们目前的应用。
 * 我们所处理的一些数据集非常庞大，其规模远超单台机器的RAM大小。随着固态硬盘(SSD)的不断普及，可以考虑使用SSD来代替RAM以拓展所处理数据集的规模。  
   为此，我们增加了一个显式映射一个或多个文件的功能，以代替匿名的mmap()。  
   截止目前，我们的实验表明对于RAM可以容纳工作集的应用，这是一条有很好发展前景的技术路线，但我们依然在分析其是否带来了足够的优势以抵消使用SSD(而非RAM)的开销。
 * 传统的malloc API功能非常有限：仅有malloc(), calloc(), realloc(),和free().
-  这些年来，业界不断地打各种补丁以拓展其能力，包括但不限于valloc(),memalign(), posix_memalign(), recalloc()和malloc_usable_size()。  
-  这些拓展中仅有posix_memalign()被标准化了，但当重新分配对齐的内存时，这种补丁式的局限性便暴露无遗。类似的问题也存在于对齐，归零，填充以及拓展/收缩(重定位/非重定位)等各种功能组合使用的场景。  
-  为此，我们开发了一套全新的*allocm() API以支持所有合理的功能组合。API的详情可以参考jemalloc的使用手册。  
-  我们正在使用这一特性来优化C++的String类，String类要求仅就地完成重分配才成功。
-  我们也计划近期在hash table的实现中使用这一全新的API来完成对齐内存的重分配，这将简化已有的应用逻辑。
+  这些年来，业界通过不断地打各种补丁以拓展其能力，包括但不限于valloc(),memalign(), posix_memalign(), recalloc()和malloc_usable_size()等。  
+  这些拓展中仅有posix_memalign()被标准化了，但当重新分配对齐的内存时，这种补丁式的拓展局限性便暴露无遗。类似的问题也存在于对齐，归零，填充以及拓展/收缩(重定位/非重定位)等各种功能组合使用的场景。    
+  为此，我们开发了一套全新的*allocm() API以支持所有合理的功能组合。API的详情可以参考jemalloc的使用手册。   
+  我们正在使用这一特性来优化C++的String类，String类要求仅就地完成重分配才算成功。  
+  我们也计划近期在hash table的实现中使用这一全新的API来完成对齐内存的重分配，这将简化已有的应用逻辑。  
 
 ### Successes at Facebook(Facebook的成功案例)
 #####
@@ -256,10 +255,10 @@ More generally, jemalloc's consistent behavior has allowed us to make more accur
 which aids operations as well as long term infrastructure planning.
 All that said, jemalloc does have one very tangible benefit: it is fast.
 #####
-jemalloc给Facebook带来的一些实质性收益难以完全量化。
-例如，我们曾多次在生产环境的系统中使用堆内存分析来诊断内存问题，从而避免该问题导致服务中断，更不用说在使用堆内存分析来开发或优化应用。  
-总的来说，因为jemalloc其高一致的行为使得我们能够更加准确的预测内存的使用率，这对运营和长期的基础设施计划都很有利。  
-除此之外，jemalloc最实实在在的一个优势就是：它很快。
+jemalloc给Facebook带来的一些实质性收益难以完全量化。  
+例如，我们曾多次在生产环境的系统中使用堆内存分析来诊断内存问题，从而避免该问题导致服务中断，更不用说在使用堆内存分析来开发或优化应用。    
+总的来说，因为jemalloc其高一致的行为使得我们能够更加准确的预测内存的使用率，这对运营和长期的基础设施计划都很有利。   
+除此之外，jemalloc最实实在在的一个优势就是：它很快。  
 
 #####
 Memory allocator microbenchmark results are notoriously difficult to extrapolate to real-world applications (though that doesn't stop people from trying).
@@ -273,13 +272,13 @@ and for the other five machines we used the LD_PRELOAD environment variable to l
 Note that newer versions of glibc exist (we used the default for CentOS 5.2), and that the newest version of tcmalloc is 1.6,
 but we encountered undiagnosed application instability when using versions 1.5 and 1.6.
 #####
-内存分配器的微基准测试的结果通常难以有效指导真实世界中的应用程序(尽管从未阻止人们去尝试)。
-Facebook投入了很大一部分的基础设施资源给使用HipHop技术向用户提供网页服务的机器。
-尽管这只是jemalloc在Facebook的多种应用场景之一，但它作为一个来自真实世界的例证，充分展示了分配器性能产生的关键影响。
-我们使用了6台配置完全相同的机器，每台都拥有8核的CPU，进行服务器总吞吐量的对比。
-这些机器在一个小时内处理了相似但并不完全相同的请求。
-我们以4分钟为间隔进行采样(共15个样本)，通过CPU开销的逆相关性来衡量吞吐量，以及计算相对的平均值。  
-其中一台机器使用glibc2.5默认的malloc实现，其它五台机器则通过使用LD_PRELOAD环境变量分别加载ptmalloc3、Hoard 3.8、concur1.0.2、tcmalloc 1.4和jemalloc 2.1.0。
+内存分配器的微基准测试的结果通常难以有效指导真实世界中的应用程序(尽管从未阻止人们去尝试)。  
+Facebook投入了很大一部分的基础设施资源给使用HipHop技术向用户提供网页服务的机器。  
+尽管这只是jemalloc在Facebook的多种应用场景之一，但它作为一个来自真实世界的例证，充分展示了分配器性能产生的关键影响。  
+我们使用了6台配置完全相同的机器，每台都拥有8核的CPU，以进行服务器总吞吐量的对比。  
+这些机器在一个小时内处理了相似但并不完全相同的请求。  
+我们以4分钟为间隔进行采样(共15个样本)，通过CPU开销的逆相关性来衡量吞吐量，以及计算相对的平均值。   
+其中一台机器使用glibc2.5默认的malloc实现，其它五台机器则通过使用LD_PRELOAD环境变量分别加载ptmalloc3、Hoard 3.8、concur1.0.2、tcmalloc 1.4和jemalloc 2.1.0。  
 注意到，虽然已经有更新版本的glibc(我们使用CentOS 5.2的默认版本)，并且最新版本的tcmalloc是1.6，但由于使用1.5和1.6版本时出现无法诊断的应用稳定性问题，所以均使用了较低的版本。
 
 #####
@@ -306,8 +305,8 @@ We interpret this to indicate that jemalloc will continue to scale as we deploy 
 #####
 本实验的主要目的在于展示分配器质量所能产生的巨大影响，正如glibc与jemalloc的对比所示，  
 但我们还开展了几次更大规模的实验，采用不同硬件配置和客户端请求负载，以量化jemalloc相对于tcmalloc的性能优势。  
-总的来说：随着CPU数量的增加，jemelloc相比tcmalloc的性能差距会持续增加。
-基于此，我们认为随着未来部署拥有更多CPU核心的新硬件，jemalloc仍能保持非常优秀的扩展性。
+总的来说：随着CPU数量的增加，jemelloc相比tcmalloc的性能差距会持续增加。  
+基于此，我们认为随着未来部署拥有更多CPU核心的新硬件，jemalloc仍能保持非常优秀的扩展性。  
 
 ### Future work(未来的工作)
 #####
@@ -318,9 +317,9 @@ Unless the application takes special action to control how arenas are assigned (
 the initialization phase is apt to leave behind a wasteland of poorly utilized arenas (that is, high fragmentation).
 Workarounds exist, but we intend to address this and other issues as they arise due to unforeseen application behavior.
 #####
-jemalloc目前已经相当成熟，但还存在一些已知的缺陷，其中多数都涉及arena与线程的绑定机制。  
-假设某个应用程序启动线程池来填充一个大型的静态数据结构，然后再剩余执行时间内恢复到单线程运行模式。  
-除非应用程序采用特殊的动作来控制arena的分配(或者简单的限制arena的数量)，否则在初始化阶段可能留下大量利用率低下的arena(这就是高度的碎片化)。
+jemalloc目前已经相当成熟，但还存在一些已知的缺陷，其中多数都涉及arena与线程的绑定机制。   
+假设某个应用程序启动线程池来填充一个大型的静态数据结构，然后在剩余的执行时间内恢复到单线程运行模式。  
+除非应用程序采用特殊的动作来控制arena的分配(或者简单的限制arena的数量)，否则在初始化阶段可能留下大量利用率低下的arena(这就是高度的碎片化)。  
 现有的应对方案虽能缓解此问题，但我们计划从根本上解决这一缺陷及其他因不可预见的应用行为所引发的问题。
 
 ### Acknowledgements(致谢)
