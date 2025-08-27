@@ -50,7 +50,9 @@ public abstract class MyPoolArena<T> {
      * 从当前PoolArena中申请分配内存，并将其包装成一个PooledByteBuf返回
      * */
     MyPooledByteBuf<T> allocate(int reqCapacity, int maxCapacity) {
+        // 从对象池中获取缓存的PooledByteBuf对象
         MyPooledByteBuf<T> buf = newByteBuf(maxCapacity);
+        // 为其分配底层数组对应的内存
         allocate(buf, reqCapacity);
         return buf;
     }
