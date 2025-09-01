@@ -161,8 +161,24 @@ public abstract class MyPooledByteBuf<T> extends MyAbstractReferenceCountedByteB
 }
 ```
 ##### 2.3 ByteBuf简易对象池内部实现解析
-下面我们来分析ByteBuf对象池的内部工作原理。
+下面我们来分析ByteBuf对象池的内部工作原理。作为一个对象池，我们主要关注获取对象与归还对象两部分的逻辑。
+* 获取对象的逻辑入口在Recycler类的get方法。jemalloc的论文中提到，线程本地缓存在减少同步竞争的同时，也会增加内存碎片，因此netty中不允许线程不加节制的缓存ByteBuf对象。  
+  netty允许通过系统参数io.netty.recycler.maxCapacityPerThread来配置每个线程所能缓存的最大ByteBuf对象数量。特别的当其为0时，则代表ByteBuf不使用线程缓存，每次获取都创建一个新的对象。
+* 每个线程的本地缓存存储在FastThreadLocal类型的LocalPool中，LocalPool内部持有了一个MessagePassingQueue队列来存放池化对象。  
+  MessagePassingQueue是一个线程安全的队列，特别适合于**多写单读**的场景。因为每个线程都只通过独属于线程自己的LocalPool获取池化对象，但最终释放并归还池化对象的线程可以是任意线程，因此使用MessagePassingQueue是性能最佳的。  
+  这一点与jemalloc获取与释放池化内存的逻辑是一致的。_“Freed memory is always returned to the arena from which it came, regardless of which thread performs the deallocation.”_
+* 通过线程缓存维护池化对象是一种用于提升吞吐量的机制，其并非万能药。在对性能要求不高的场景中，无脑的进行线程缓存会浪费内存。  
+  因此，netty中默认只有FastThreadLocalThread这种netty中独有的线程类型才进行缓存，但也可以通过配置系统参数(io.netty.recycler.batchFastThreadLocalOnly=false)允许所有类型的线程都进行缓存。  
+* 获取对象时，LocalPool可能为空，不一定能获取到可用的池化对象。这时便需要new一个新的池化对象出来。netty中引入了一个分配因子，在所有的new新对象的申请中，默认只有一小部分(1/8)的请求会生成池化对象，而大部分情况下生成的都是无需池化，即释放时不归还到对象池中的普通对象(NOOP_HANDLE)。  
+  **这样做的目的是为了希望在分配对象的吞吐量与内存碎片之间获得一个平衡，让空间与时间的取舍达到一个相对的平衡点。**
+* 生成池化对象时，会将一个Handle对象通过构造函数注入给池化对象(比如PooledByteBuf)，而后在其deallocate被释放时，通过Handle的recycle方法尝试将该对象归还到其对应的对象池中。
+#####
+![Recycler示意图.png](Recycler示意图.png)
+#####
 ```java
+/**
+ * 参考自Netty 4.1.118的Recycler类，但做了一定的简化
+ * */
 public abstract class MyRecycler<T> {
 
     /**

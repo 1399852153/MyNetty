@@ -8,6 +8,9 @@ import org.jctools.queues.MpscChunkedArrayQueue;
 import java.util.ArrayDeque;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
+/**
+ * 参考自Netty 4.1.118的Recycler类，但做了一定的简化
+ * */
 public abstract class MyRecycler<T> {
 
     /**
