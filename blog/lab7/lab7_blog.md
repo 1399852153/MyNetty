@@ -92,8 +92,8 @@ public class MyPooledByteBufAllocator extends MyAbstractByteBufAllocator{
 ##### 2.2 从ByteBuf对象池中获取ByteBuf对象
 * PoolArena中实际生成可用的PooledByteBuf的方法中，只做了两件事情。  
   首先是从ByteBuf的对象池中获得一个ByteBuf对象，然后再为这个对象的底层数组分配与所申请大小相匹配的内存。本小节，我们主要探讨前一个操作。
-* 最终会发现，获取ByteBuf对象逻辑是在PooledHeapByteBuf.newInstance方法中，通过一个全局的ObjectPool对象池来获得的(RECYCLER.get())。
-* 获取到一个可用的ByteBuf对象后，通过PooledHeapByteBuf的reuse方法，将自身内部的读写指针等内部属性都重新初始化一遍，避免被污染。
+* 获取ByteBuf对象逻辑是在PooledHeapByteBuf.newInstance方法中，通过一个全局的ObjectPool对象池来获得的(RECYCLER.get())。  
+  获取到一个可用的ByteBuf对象后，通过PooledHeapByteBuf的reuse方法，将自身内部的读写指针等内部属性都重新初始化一遍，避免被污染。
 ```java 
 public class MyPoolArena{
     // 。。。 已省略无关逻辑
@@ -162,6 +162,7 @@ public abstract class MyPooledByteBuf<T> extends MyAbstractReferenceCountedByteB
 ```
 ##### 2.3 ByteBuf简易对象池内部实现解析
 下面我们来分析ByteBuf对象池的内部工作原理。作为一个对象池，我们主要关注获取对象与归还对象两部分的逻辑。
+##### 获取对象
 * 获取对象的逻辑入口在Recycler类的get方法。jemalloc的论文中提到，线程本地缓存在减少同步竞争的同时，也会增加内存碎片，因此netty中不允许线程不加节制的缓存ByteBuf对象。  
   netty允许通过系统参数io.netty.recycler.maxCapacityPerThread来配置每个线程所能缓存的最大ByteBuf对象数量。特别的当其为0时，则代表ByteBuf不使用线程缓存，每次获取都创建一个新的对象。
 * 每个线程的本地缓存存储在FastThreadLocal类型的LocalPool中，LocalPool内部持有了一个MessagePassingQueue队列来存放池化对象。  
@@ -171,7 +172,8 @@ public abstract class MyPooledByteBuf<T> extends MyAbstractReferenceCountedByteB
   因此，netty中默认只有FastThreadLocalThread这种netty中独有的线程类型才进行缓存，但也可以通过配置系统参数(io.netty.recycler.batchFastThreadLocalOnly=false)允许所有类型的线程都进行缓存。  
 * 获取对象时，LocalPool可能为空，不一定能获取到可用的池化对象。这时便需要new一个新的池化对象出来。netty中引入了一个分配因子，在所有的new新对象的申请中，默认只有一小部分(1/8)的请求会生成池化对象，而大部分情况下生成的都是无需池化，即释放时不归还到对象池中的普通对象(NOOP_HANDLE)。  
   **这样做的目的是为了希望在分配对象的吞吐量与内存碎片之间获得一个平衡，让空间与时间的取舍达到一个相对的平衡点。**
-* 生成池化对象时，会将一个Handle对象通过构造函数注入给池化对象(比如PooledByteBuf)，而后在其deallocate被释放时，通过Handle的recycle方法尝试将该对象归还到其对应的对象池中。
+##### 归还对象
+* 生成池化对象时，会将一个Handle对象通过构造函数注入给池化对象(比如PooledByteBuf)，而后在池化对象被释放时(比如PooledByteBuf的deallocate方法)，通过Handle的recycle方法将该对象归还到所属的对象池中。
 #####
 ![Recycler示意图.png](Recycler示意图.png)
 #####
@@ -534,4 +536,405 @@ public abstract class MyObjectPool<T> {
 }
 ```
 ## 3. Normal规格的ByteBuf池化实现解析
+下面我们开始分析池化内存中最关键的部分，即PooledByteBuf底层数组内存的池化机制。具体的入口在PoolArena的allocate方法中。
+#####
+```java
+/**
+ * 参考自netty的PoolArena，但做了大幅简化
+ * */
+public abstract class MyPoolArena<T>{
+    // 。。。 已省略无关逻辑
+  
+    final MySizeClasses mySizeClasses;
+    
+    private void allocate(MyPooledByteBuf<T> buf, final int reqCapacity) {
+        final MySizeClassesMetadataItem sizeClassesMetadataItem = mySizeClasses.size2SizeIdx(reqCapacity);
+  
+        switch (sizeClassesMetadataItem.getSizeClassEnum()){
+            case SMALL:
+                // 暂不支持
+                throw new RuntimeException("not support small size allocate! reqCapacity=" + reqCapacity);
+            // tcacheAllocateSmall(buf, reqCapacity, sizeIdx);
+            case NORMAL:
+                tcacheAllocateNormal(buf, reqCapacity, sizeClassesMetadataItem);
+                return;
+            case HUGE:
+                // 超过了PoolChunk大小的内存分配就是Huge级别的申请，每次分配使用单独的非池化的新PoolChunk来承载
+                allocateHuge(buf, reqCapacity);
+        }
+    }
+}
+```
+```java
+public class MySizeClassesMetadataItem {
 
+    private int size;
+    private SizeClassEnum sizeClassEnum;
+
+    public MySizeClassesMetadataItem(int size, SizeClassEnum sizeClassEnum) {
+        this.size = size;
+        this.sizeClassEnum = sizeClassEnum;
+    }
+
+    public int getSize() {
+        return size;
+    }
+
+    public SizeClassEnum getSizeClassEnum() {
+        return sizeClassEnum;
+    }
+}
+```
+```java
+public enum SizeClassEnum {
+    SMALL,
+    NORMAL,
+    HUGE,
+    ;
+}
+```
+### SizeClasses工作原理解析
+从上面的MyNetty的源码实现中可以看到，netty在进行实际的分配前，先基于参数reqCapacity计算出实际应该分配的大小以及规格级别，然后再基于规格级别去执行不同机制的分配操作。  
+在jemalloc的论文中提到，jemalloc默认情况将SizeClass规格分为了以下三大类。
+* Small: [8], [16, 32, 48, ..., 128], [192, 256, 320, ..., 512], [768, 1024, 1280, ..., 3840]
+* Large: [4 KiB, 8 KiB, 12 KiB, ..., 4072 KiB]
+* Huge: [4 MiB, 8 MiB, 12 MiB, …]
+#####
+而netty参考了jemalloc，同样将规格分为了对应的三类，即Small、Normal和Huge。默认情况下，Small与Normal的分界线不是4KB,而是8KB。  
+* Huge类型分配：默认情况下大于4MB的PooledByteBuf分配，视为Huge规格。因为其占用空间过大，且实际使用场景很少，所以对于Huge类型的申请，netty不进行内存池化，而是每次都临时的申请新的内存来满足需求，以减少内存碎片。  
+* Normal类型分配：默认情况下[8KB，4MB]大小区间内的PooledByteBuf分配，视为Normal规格。netty参考linux内核的伙伴分配算法，通过管理以页(默认1页8KB)为最小单位的连续内存页段(run)的方式进行维护。
+* Small类型分配：默认情况下小于8KB的PooledByteBuf分配，被视为Small规格。netty参考linux内核的slab内存分配算法，通过管理一系列固定大小的内存对象槽集合的方式，管理待分配的池化内存。
+#####
+为什么linux内核和netty都要基于实际申请的内存大小划分规格，并区别对待呢？我们留到下一篇博客介绍完small类型分配工作原理后统一进行分析。   
+下面我们基于MyNetty的SizeClasses实现源码来分析一下netty是如何进行规格划分的。  
+##### MySizeClasses源码实现
+```java
+/**
+ * 功能与Netty的SizeClasses类似，
+ * netty里支持动态配置pageSize和chunkSize来调优，并能够得到合理的伸缩比例，所以实现的比较复杂
+ * MySizeClasses这里size的规格全部写死为netty的默认值，简化复杂度
+ * */
+public class MySizeClasses {
+
+    /**
+     * 页大小直接写死，8K
+     * */
+    private final int pageSize = 8192;
+
+    /**
+     * 页大小的log2对数
+     * log2(8192) = 13
+     * */
+    private final int pageShifts = 13;
+
+    /**
+     * 一共有多个个Page类型的规格(所有的规格，恰好是pageSize的倍数的就是Page类型的规格，比如8K，16K，24K以此类推)
+     * */
+    private final int nPageSizes;
+
+    /**
+     * chunk大小直接写死，4M
+     * */
+    private final int chunkSize = 1024 * 1024 * 4;
+
+    /**
+     * size低于该值的直接通过16的倍数索引数组(size2idxTab)来快速匹配
+     * */
+    private final int lookupMaxSize = 4096;
+
+    /**
+     * QUANTUM是量子的意思，即最小的规格 是16
+     * LOG2_QUANTUM = (log2(16) = 4)
+     * */
+    private final int LOG2_QUANTUM = 4;
+
+    /**
+     * 每一个规格组的大小固定为4，组内每一个size规格的间距是固定的
+     * */
+    private static final int LOG2_SIZE_CLASS_GROUP = 2;
+
+    private final MySizeClassesMetadataItem[] sizeTable;
+
+    private final MySizeClassesMetadataItem[] size2idxTab;
+
+    private final MySizeClassesMetadataItem[] pageIdx2sizeTab;
+
+    public MySizeClasses() {
+        int sizeNum = 69;
+        sizeTable = new MySizeClassesMetadataItem[sizeNum];
+
+        // 简单起见，写死size表规格
+        // 规格跨度逐渐增加。绝大多数情况下，越小的内存规格，被申请的次数越多，因此更为精确的小规格配合slab分配可以显著减少内部内存碎片
+        // 对于较大的规格(比如normal级别的)，如果还是按照几十的间距来设置规格(1k-2k之间就有几十个不同的规格)，就会导致过多的元数据需要维护，产生过多的外部碎片而浪费内存。
+        // normal级别的内存通过伙伴算法进行分配，可以在内部内存碎片和外部内存碎片的取舍上得到一个不错的空间效率
+        sizeTable[0] = new MySizeClassesMetadataItem(16, SizeClassEnum.SMALL);
+        sizeTable[1] = new MySizeClassesMetadataItem(32, SizeClassEnum.SMALL);
+        sizeTable[2] = new MySizeClassesMetadataItem(48, SizeClassEnum.SMALL);
+        sizeTable[3] = new MySizeClassesMetadataItem(64, SizeClassEnum.SMALL);//组内固定间距16(2^4)
+
+        sizeTable[4] = new MySizeClassesMetadataItem(80, SizeClassEnum.SMALL);
+        sizeTable[5] = new MySizeClassesMetadataItem(96, SizeClassEnum.SMALL);
+        sizeTable[6] = new MySizeClassesMetadataItem(112, SizeClassEnum.SMALL);
+        sizeTable[7] = new MySizeClassesMetadataItem(128, SizeClassEnum.SMALL);//组内固定间距16(2^4)
+
+        sizeTable[8] = new MySizeClassesMetadataItem(160, SizeClassEnum.SMALL);
+        sizeTable[9] = new MySizeClassesMetadataItem(192, SizeClassEnum.SMALL);
+        sizeTable[10] = new MySizeClassesMetadataItem(224, SizeClassEnum.SMALL);
+        sizeTable[11] = new MySizeClassesMetadataItem(256, SizeClassEnum.SMALL);//组内固定间距32(2^5)
+
+        sizeTable[12] = new MySizeClassesMetadataItem(320, SizeClassEnum.SMALL);
+        sizeTable[13] = new MySizeClassesMetadataItem(384, SizeClassEnum.SMALL);
+        sizeTable[14] = new MySizeClassesMetadataItem(448, SizeClassEnum.SMALL);
+        sizeTable[15] = new MySizeClassesMetadataItem(512, SizeClassEnum.SMALL);//组内固定间距64(2^6)
+
+        sizeTable[16] = new MySizeClassesMetadataItem(640, SizeClassEnum.SMALL);
+        sizeTable[17] = new MySizeClassesMetadataItem(768, SizeClassEnum.SMALL);
+        sizeTable[18] = new MySizeClassesMetadataItem(896, SizeClassEnum.SMALL);
+        sizeTable[19] = new MySizeClassesMetadataItem(1024, SizeClassEnum.SMALL);//组内固定间距128(2^7)
+
+        sizeTable[20] = new MySizeClassesMetadataItem(1280, SizeClassEnum.SMALL);
+        sizeTable[21] = new MySizeClassesMetadataItem(1536, SizeClassEnum.SMALL);
+        sizeTable[22] = new MySizeClassesMetadataItem(1792, SizeClassEnum.SMALL);
+        sizeTable[23] = new MySizeClassesMetadataItem(1024 * 2, SizeClassEnum.SMALL);//组内固定间距256(2^8)
+
+        sizeTable[24] = new MySizeClassesMetadataItem((int) (1024 * 2.5), SizeClassEnum.SMALL);
+        sizeTable[25] = new MySizeClassesMetadataItem(1024 * 3, SizeClassEnum.SMALL);
+        sizeTable[26] = new MySizeClassesMetadataItem((int) (1024 * 3.5), SizeClassEnum.SMALL);
+        sizeTable[27] = new MySizeClassesMetadataItem(1024 * 4, SizeClassEnum.SMALL);//组内固定间距512(2^9)
+
+        sizeTable[28] = new MySizeClassesMetadataItem(1024 * 5, SizeClassEnum.SMALL);
+        sizeTable[29] = new MySizeClassesMetadataItem(1024 * 6, SizeClassEnum.SMALL);
+        sizeTable[30] = new MySizeClassesMetadataItem(1024 * 7, SizeClassEnum.SMALL);
+        sizeTable[31] = new MySizeClassesMetadataItem(1024 * 8, SizeClassEnum.NORMAL);//组内固定间距1024(2^10) 大于等于PageSize的都是Normal级别
+
+        sizeTable[32] = new MySizeClassesMetadataItem(1024 * 10, SizeClassEnum.NORMAL);
+        sizeTable[33] = new MySizeClassesMetadataItem(1024 * 12, SizeClassEnum.NORMAL);
+        sizeTable[34] = new MySizeClassesMetadataItem(1024 * 14, SizeClassEnum.NORMAL);
+        sizeTable[35] = new MySizeClassesMetadataItem(1024 * 16, SizeClassEnum.NORMAL);//组内固定间距2048(2^11)
+
+        sizeTable[36] = new MySizeClassesMetadataItem(1024 * 20, SizeClassEnum.NORMAL);
+        sizeTable[37] = new MySizeClassesMetadataItem(1024 * 24, SizeClassEnum.NORMAL);
+        sizeTable[38] = new MySizeClassesMetadataItem(1024 * 28, SizeClassEnum.NORMAL);
+        sizeTable[39] = new MySizeClassesMetadataItem(1024 * 32, SizeClassEnum.NORMAL);//组内固定间距4096(2^12)
+
+        sizeTable[40] = new MySizeClassesMetadataItem(1024 * 40, SizeClassEnum.NORMAL);
+        sizeTable[41] = new MySizeClassesMetadataItem(1024 * 48, SizeClassEnum.NORMAL);
+        sizeTable[42] = new MySizeClassesMetadataItem(1024 * 56, SizeClassEnum.NORMAL);
+        sizeTable[43] = new MySizeClassesMetadataItem(1024 * 64, SizeClassEnum.NORMAL);//组内固定间距8192(2^13)
+
+        sizeTable[44] = new MySizeClassesMetadataItem(1024 * 80, SizeClassEnum.NORMAL);
+        sizeTable[45] = new MySizeClassesMetadataItem(1024 * 96, SizeClassEnum.NORMAL);
+        sizeTable[46] = new MySizeClassesMetadataItem(1024 * 112, SizeClassEnum.NORMAL);
+        sizeTable[47] = new MySizeClassesMetadataItem(1024 * 128, SizeClassEnum.NORMAL);//组内固定间距16384(2^14)
+
+        sizeTable[48] = new MySizeClassesMetadataItem(1024 * 160, SizeClassEnum.NORMAL);
+        sizeTable[49] = new MySizeClassesMetadataItem(1024 * 192, SizeClassEnum.NORMAL);
+        sizeTable[50] = new MySizeClassesMetadataItem(1024 * 224, SizeClassEnum.NORMAL);
+        sizeTable[51] = new MySizeClassesMetadataItem(1024 * 256, SizeClassEnum.NORMAL);//组内固定间距32768(2^15)
+
+        sizeTable[52] = new MySizeClassesMetadataItem(1024 * 320, SizeClassEnum.NORMAL);
+        sizeTable[53] = new MySizeClassesMetadataItem(1024 * 384, SizeClassEnum.NORMAL);
+        sizeTable[54] = new MySizeClassesMetadataItem(1024 * 448, SizeClassEnum.NORMAL);
+        sizeTable[55] = new MySizeClassesMetadataItem(1024 * 512, SizeClassEnum.NORMAL);//组内固定间距65536(2^16)
+
+        sizeTable[56] = new MySizeClassesMetadataItem(1024 * 640, SizeClassEnum.NORMAL);
+        sizeTable[57] = new MySizeClassesMetadataItem(1024 * 768, SizeClassEnum.NORMAL);
+        sizeTable[58] = new MySizeClassesMetadataItem(1024 * 896, SizeClassEnum.NORMAL);
+        sizeTable[59] = new MySizeClassesMetadataItem(1024 * 1024, SizeClassEnum.NORMAL);//组内固定间距131072(2^17)
+
+        sizeTable[60] = new MySizeClassesMetadataItem((int) (1024 * 1024 * 1.25), SizeClassEnum.NORMAL);
+        sizeTable[61] = new MySizeClassesMetadataItem((int) (1024 * 1024 * 1.5), SizeClassEnum.NORMAL);
+        sizeTable[62] = new MySizeClassesMetadataItem((int) (1024 * 1024 * 1.75), SizeClassEnum.NORMAL);
+        sizeTable[63] = new MySizeClassesMetadataItem(1024 * 1024 * 2, SizeClassEnum.NORMAL);//组内固定间距262144(2^18)
+
+        sizeTable[64] = new MySizeClassesMetadataItem((int) (1024 * 1024 * 2.5), SizeClassEnum.NORMAL);
+        sizeTable[65] = new MySizeClassesMetadataItem(1024 * 1024 * 3, SizeClassEnum.NORMAL);
+        sizeTable[66] = new MySizeClassesMetadataItem((int) (1024 * 1024 * 3.5), SizeClassEnum.NORMAL);
+        sizeTable[67] = new MySizeClassesMetadataItem(1024 * 1024 * 4, SizeClassEnum.NORMAL);//组内固定间距524288(2^19)
+
+        // 一个chunk就是4M，超过chunk级别的规格就是Huge类型了,这个是MyNetty额外加的一项
+        sizeTable[68] = new MySizeClassesMetadataItem(0, SizeClassEnum.HUGE);
+
+        // 计算一共有多个个Page类型的规格(所有的规格，恰好是pageSize的倍数的就是Page类型的规格，比如8K，16K，24K以此类推)
+        int nPageSizes = 0;
+        for (MySizeClassesMetadataItem item : sizeTable) {
+            int size = item.getSize();
+            if (size >= pageSize & size % pageSize == 0) {
+                nPageSizes++;
+            }
+        }
+        this.nPageSizes = nPageSizes;
+
+        // 构建lookupMaxSize以下规格的快速查找索引表
+        this.size2idxTab = buildSize2idxTab(lookupMaxSize,sizeTable);
+        this.pageIdx2sizeTab = newPageIdx2sizeTab(sizeTable, sizeTable.length-1, this.nPageSizes);
+    }
+
+    private MySizeClassesMetadataItem[] buildSize2idxTab(int lookupMaxSize, MySizeClassesMetadataItem[] sizeTable) {
+        MySizeClassesMetadataItem[] size2idxTab = new MySizeClassesMetadataItem[lookupMaxSize >> LOG2_QUANTUM];
+
+        int size2idxTabIndex = 0;
+        int lastQuantumBaseSize = 0;
+        for(int i=0; i<sizeTable.length; i++){
+            MySizeClassesMetadataItem item = sizeTable[i];
+
+            // 量子基数(size都是QUANTUM(16)的倍数，比如size=16，那就是1；size=32，那就是2 依此类推)
+            int quantumBaseSize = item.getSize() >> LOG2_QUANTUM;
+
+            for(int j=lastQuantumBaseSize; j<quantumBaseSize; j++){
+                if(size2idxTabIndex < size2idxTab.length){
+                    size2idxTab[size2idxTabIndex] = item;
+                    size2idxTabIndex++;
+                }
+            }
+
+            lastQuantumBaseSize = quantumBaseSize;
+        }
+
+        return size2idxTab;
+    }
+
+    private MySizeClassesMetadataItem[] newPageIdx2sizeTab(MySizeClassesMetadataItem[] sizeTable, int nSizes, int nPSizes) {
+        MySizeClassesMetadataItem[] pageIdx2sizeTab = new MySizeClassesMetadataItem[nPSizes];
+        int pageIdx = 0;
+        for (int i = 0; i < nSizes; i++) {
+            MySizeClassesMetadataItem item = sizeTable[i];
+            int size = item.getSize();
+            if (size >= pageSize && size % pageSize == 0) {
+                pageIdx2sizeTab[pageIdx] = item;
+                pageIdx++;
+            }
+        }
+        return pageIdx2sizeTab;
+    }
+
+    public MySizeClassesMetadataItem size2SizeIdx(int size) {
+        if (size == 0) {
+            return sizeTable[0];
+        }
+        if (size > chunkSize) {
+            // 申请的是huge级别的内存规格
+            return sizeTable[sizeTable.length-1];
+        }
+
+        // 简单起见，不支持配置内存对齐(directMemoryCacheAlignment)
+
+        if (size <= lookupMaxSize) {
+            // 小于4096的size规格，可以通过以16为基数的索引表，以O(1)的时间复杂度直接找到对应的规格
+            // size-1 / MIN_TINY
+            return size2idxTab[size - 1 >> LOG2_QUANTUM];
+        }
+
+        // 申请规格对应的向上取整的2次幂（比如15，sizeToClosestLog2就是4，代表距离最近的二次幂规格是16）
+        int sizeToClosestLog2 = MathUtil.log2((size << 1) - 1);
+
+        // size所在内存规格组编号，每一个组内包含4个规格(LOG2_SIZE_CLASS_GROUP=2),每个组内第4个也是最后一个规格是64的倍数(2^6)
+        // 第一个组最后一个规格为64，第二组最后一个规格为64*2=128，第三组最后一个规格为64*4=128*2=256，依次类推，每一组的最后一个规格都是前一组最后一个规格的2倍
+        // 所以size在二次幂向上对其后，除以64就能得到其所属的组的编号(log2对数就是直接减6(2+4))
+        // lookupMaxSize很大，所以sizeGroupShift肯定大于0
+        int sizeGroupShift = sizeToClosestLog2 - (LOG2_SIZE_CLASS_GROUP + LOG2_QUANTUM);;
+
+        // 每个组内有4个规格，所以sizeGroupShift*4后获得对应的组的起始规格下标号
+        int groupFirstIndex = sizeGroupShift << LOG2_SIZE_CLASS_GROUP;
+
+        // 组内规格之间固定的间隔(每一组内部有4个规格，而相邻两组之间规格相差2倍，所以除以8就能得到组内的固定间隔)
+        int log2Delta = sizeToClosestLog2 - LOG2_SIZE_CLASS_GROUP - 1;
+
+        // size最贴近组内哪一个规格
+        // (size - 1 >> log2Delta)得到当前size具体是几倍的log2Delta
+        // 组内共(1 << LOG2_SIZE_CLASS_GROUP)=4个规格，因此对4求余数(x为二次幂可以通过&(x-1)的方式优化)，就能得到组内具体的规格项下标
+        int mod = size - 1 >> log2Delta & (1 << LOG2_SIZE_CLASS_GROUP) - 1;
+
+        // 最终确定实际对应内存规格的下标
+        int finallySizeIndex = groupFirstIndex + mod;
+        // 返回最终所匹配到的规格信息
+        return sizeTable[finallySizeIndex];
+    }
+
+    public MySizeClassesMetadataItem sizeIdx2size(int sizeIdx) {
+        return sizeTable[sizeIdx];
+    }
+
+    /**
+     * 申请pages个连续页时，向上规格化后所对应的规格
+     * */
+    public int pages2pageIdx(int pages) {
+        return pages2pageIdxCompute(pages, false);
+    }
+
+    /**
+     * 申请pages个连续页时，向下规格化后所对应的规格
+     * */
+    public int pages2pageIdxFloor(int pages) {
+        return pages2pageIdxCompute(pages, true);
+    }
+
+    public int getPageSize() {
+        return pageSize;
+    }
+
+    public int getNPageSizes() {
+        return nPageSizes;
+    }
+
+    public int getPageShifts() {
+        return pageShifts;
+    }
+
+    public int getChunkSize() {
+        return chunkSize;
+    }
+
+    /**
+     * 和size2SizeIdx逻辑几乎一样，也是基于有规律的pageIdx2sizeTab表来快速定位对应规格
+     * */
+    private int pages2pageIdxCompute(int pages, boolean floor) {
+        // 将申请的总页数 乘以 页大小 得到总共需要申请的size之和
+        int pageSize = pages << pageShifts;
+        if (pageSize > chunkSize) {
+            // 申请的是huge级别的内存规格
+            return this.pageIdx2sizeTab.length;
+        }
+
+        // 申请规格对应的向上取整的2次幂（比如8100，sizeToClosestLog2就是13，代表距离最近的二次幂规格是8192）
+        int sizeToClosestLog2 = MathUtil.log2((pageSize << 1) - 1);
+
+        // pageSize所在内存规格组编号，每一个组内包含4个规格(LOG2_SIZE_CLASS_GROUP=2),单位起步是页级别(PAGE_SHIFTS)
+        int sizeGroupShift;
+        if(sizeToClosestLog2 < LOG2_SIZE_CLASS_GROUP + pageShifts){
+            // 说明是第一组内的规格
+            sizeGroupShift = 0;
+        }else{
+            sizeGroupShift = sizeToClosestLog2 - (LOG2_SIZE_CLASS_GROUP + pageShifts);
+        }
+
+        // 每个组内有4个规格，所以sizeGroupShift*4后获得对应的组的起始规格下标号
+        int groupFirstIndex = sizeGroupShift << LOG2_SIZE_CLASS_GROUP;
+
+        // 组内规格之间固定的间隔(每一组内部有4个规格)
+        int log2Delta;
+        if(sizeToClosestLog2 < LOG2_SIZE_CLASS_GROUP + pageShifts + 1){
+            // 前两个group的组内间隔都是8K
+            log2Delta = pageShifts;
+        }else{
+            // 后面每个组的组内间隔，相比前一个组都大两倍
+            log2Delta = sizeToClosestLog2 - LOG2_SIZE_CLASS_GROUP - 1;
+        }
+
+        // pageSize最贴近组内哪一个规格
+        // (pageSize - 1 & deltaInverseMask)得到当前pageSize具体是几倍的log2Delta
+        // 组内共(1 << LOG2_SIZE_CLASS_GROUP)=4个规格，因此对4求余数(x为二次幂可以通过&(x-1)的方式优化)，就能得到组内具体的规格项下标
+        int deltaInverseMask = -1 << log2Delta;
+        int mod = (pageSize - 1 & deltaInverseMask) >> log2Delta & (1 << LOG2_SIZE_CLASS_GROUP) - 1;
+
+        int pageIdx = groupFirstIndex + mod;
+
+        if (floor && pageIdx2sizeTab[pageIdx].getSize() > pages << pageShifts) {
+            // 默认都是向上取整的，如果floor=true，且当前向上取整的size规格确实大于pages对应的size，则返回前一个规格
+            return pageIdx-1;
+        }else{
+            return pageIdx;
+        }
+    }
+}
+```

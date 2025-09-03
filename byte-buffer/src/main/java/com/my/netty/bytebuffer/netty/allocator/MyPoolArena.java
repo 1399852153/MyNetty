@@ -7,6 +7,9 @@ import com.my.netty.bytebuffer.netty.MyPooledHeapByteBuf;
 import java.nio.ByteBuffer;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * 参考自netty的PoolArena，但做了大幅简化
+ * */
 public abstract class MyPoolArena<T> {
 
     final MyPooledByteBufAllocator parent;
@@ -186,7 +189,7 @@ public abstract class MyPoolArena<T> {
             return;
         }
 
-        // 所有的PoolChunkList都尝试过了一遍，都没能分配成功，说明已经被创建出来的，所有有剩余空间的PoolChunk空间都不够了
+        // 所有的PoolChunkList都尝试过了一遍，都没能分配成功，说明已经被创建出来的，所有有剩余空间的PoolChunk空间都不够了(或者最初阶段还没有创建任何一个PoolChunk)
 
         // MyNetty对sizeClass做了简化，里面的规格都是写死的，所以直接从sizeClass里取
         int pageSize = this.mySizeClasses.getPageSize();
