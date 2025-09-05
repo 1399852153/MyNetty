@@ -958,8 +958,361 @@ Netty中为了支持动态的设置Normal页单位的大小，实现了一套复
 * 对于小于lookupMaxSize大小的申请，一次简单的位操作可以直接完成计算，索引表浪费空间但能节约时间。而对于大于lookupMaxSize小于ChunkSize的申请，通过几次运算后也能在常数复杂度内完成，时间复杂度大O相同但小O更大。  
   考虑到小于lookupMaxSize的小内存申请数通常远多于超过lookupMaxSize的大内存申请数。可以说，netty在规范化计算的实现上，很好的平衡了时间与空间。
 #####
-看到这里，读者应该可以理解为什么Netty的SizeClasses的构造方法中要实现的那么复杂，里面各种的分组，各种的logXXX的变量。其最重要的目的就是为了实现常数复杂度的规范化计算，并尽量节约其中各种索引元数据所占用的内存。
-
-### PoolChunk解析
+看到这里，读者应该可以理解为什么Netty的SizeClasses的构造方法中要实现的那么复杂，里面各种的分组，各种的logXXX的变量。其最重要的目的就是为了实现常数复杂度的规范化计算以及动态的页大小设置，同时尽量减少其中各种索引元数据所占用的内存。
 
 ### PoolChunkList解析
+PoolChunk是Netty中分配内存的基本单元，Chunk就是一大块内存的意思，在使用时会按照需求有机切割为一些不同大小的连续内存段以供使用。默认情况下，ChunkSize为4MB。  
+Normal和Small类型的内存申请的空间通常远小于Chunk的大小，因此一个新的PoolChunk在进行一次内存分配后，必然会空余大量的内存空间。要减少内存碎片，就必须尽可能的让PoolChunk中的内存空间被充分利用，尽可能用更少的PoolChunk数来满足更多的内存分配申请。  
+Netty参考jemalloc将PoolChunk按照内部的空间利用率有机的组织起来，按照使用率的阈值范围进行分组，每一组PoolChunk以双向链表的形式构成一个PoolChunkList。  
+##### PoolChunkList结构图
+![PoolChunkList.png](PoolChunkList.png)
+#####
+下面我们结合源码看看Netty是如何进行Normal类型的内存分配的。
+* PoolArena按照内存使用率区间划分了6个PoolChunkList，分别是qInit、q000[1%-50%)、q025[25%-75%)、q050[50%-100%)、q075[75%-100%)、q100(100%)。 
+  按照使用率的大小，以双向链表的形式组织了起来，刚被创建的PoolChunk会被放入qInit，随着后续内存的分配与回收，如果PoolChunk的使用率超过了所在PoolChunkList的上限或下限，则会被移动到满足其使用率范围的最临近的那个PoolChunkList中。  
+  可以注意到，不同的PoolChunkList的使用率区间是存在重合的，q000中的PoolChunk如果内存使用率从10%变为了40%，并不会被立即移动到q025中。  
+  这样设计的目的是为了避免位于区间临界点的PoolChunk因为频繁的分配和回收，而反复的在不同PoolChunkList中迁移，以提高效率。
+* 出于减少内存碎片的考虑，PoolArena与线程的关系是1对N的，所以访问PoolArena是可能出现并发的。为了保护分配时元数据的变更，实际分配前使用PoolArena读熟的互斥锁进行了加锁操作(tcacheAllocateNormal方法)。
+* 在allocateNormal方法中，可以看到按照顺序依次尝试从q050、q025、q000、qInit和q075这些使用率不满100%的PoolChunkList中进行分配，如果分配成功则会提前返回。  
+  如果所有的PoolChunkList都无法满足当前的分配请求，则会新创建一个空的PoolChunk进行分配，并将这个新的PoolChunk放入qInit中。
+#####
+```java
+/**
+ * 参考自netty的PoolArena，但做了大幅简化
+ * */
+public abstract class MyPoolArena<T> {
+    // 。。。 已省略无关逻辑    
+    
+    final MyPooledByteBufAllocator parent;
+    final MySizeClasses mySizeClasses;
+
+    private final MyPoolChunkList<T> q050;
+    private final MyPoolChunkList<T> q025;
+    private final MyPoolChunkList<T> q000;
+    private final MyPoolChunkList<T> qInit;
+    private final MyPoolChunkList<T> q075;
+    private final MyPoolChunkList<T> q100;
+
+    private final ReentrantLock lock = new ReentrantLock();
+
+    public MyPoolArena(MyPooledByteBufAllocator parent) {
+        this.parent = parent;
+        this.mySizeClasses = new MySizeClasses();
+
+        int chunkSize = this.mySizeClasses.getChunkSize();
+
+        // 从小到大，使用率区间相近的PoolChunkList进行关联，组成双向链表(使用率区间有重合，论文中提到是设置磁滞效应，避免使用率小幅波动时反复移动位置，以提高性能)
+        // qInit <=> q000(1%-50%) <=> q025(25%-75%) <=> q050(50%-100%) <=> q075(75%-100%) <=> q100(100%)
+        this.q100 = new MyPoolChunkList<T>(this, null, 100, Integer.MAX_VALUE, chunkSize);
+        this.q075 = new MyPoolChunkList<T>(this, q100, 75, 100, chunkSize);
+        this.q050 = new MyPoolChunkList<T>(this, q075, 50, 100, chunkSize);
+        this.q025 = new MyPoolChunkList<T>(this, q050, 25, 75, chunkSize);
+        this.q000 = new MyPoolChunkList<T>(this, q025, 1, 50, chunkSize);
+        this.qInit = new MyPoolChunkList<T>(this, q000, Integer.MIN_VALUE, 25, chunkSize);
+
+        this.q100.setPrevList(q075);
+        this.q075.setPrevList(q050);
+        this.q050.setPrevList(q025);
+        this.q025.setPrevList(q000);
+        this.q000.setPrevList(null);
+        this.qInit.setPrevList(qInit);
+
+        // 简单起见，PoolChunkListMetric暂不实现
+    }
+
+    /**
+     * 从当前PoolArena中申请分配内存，并将其包装成一个PooledByteBuf返回
+     * */
+    MyPooledByteBuf<T> allocate(int reqCapacity, int maxCapacity) {
+        // 从对象池中获取缓存的PooledByteBuf对象
+        MyPooledByteBuf<T> buf = newByteBuf(maxCapacity);
+        // 为其分配底层数组对应的内存
+        allocate(buf, reqCapacity);
+        return buf;
+    }
+
+    private void allocate(MyPooledByteBuf<T> buf, final int reqCapacity) {
+        final MySizeClassesMetadataItem sizeClassesMetadataItem = mySizeClasses.size2SizeIdx(reqCapacity);
+
+        switch (sizeClassesMetadataItem.getSizeClassEnum()){
+            case SMALL:
+                // 暂不支持
+                throw new RuntimeException("not support small size allocate! reqCapacity=" + reqCapacity);
+                // tcacheAllocateSmall(buf, reqCapacity, sizeIdx);
+            case NORMAL:
+                tcacheAllocateNormal(buf, reqCapacity, sizeClassesMetadataItem);
+                return;
+            case HUGE:
+                // 超过了PoolChunk大小的内存分配就是Huge级别的申请，每次分配使用单独的非池化的新PoolChunk来承载
+                allocateHuge(buf, reqCapacity);
+        }
+    }
+
+    private void tcacheAllocateNormal(MyPooledByteBuf<T> buf, final int reqCapacity, final MySizeClassesMetadataItem sizeClassesMetadataItem) {
+        // todo 基于线程本地缓存获取，暂不实现
+
+        lock();
+        try {
+            // 加锁处理，防止并发修改元数据
+            allocateNormal(buf, reqCapacity, sizeClassesMetadataItem);
+        } finally {
+            unlock();
+        }
+    }
+
+    private void allocateHuge(MyPooledByteBuf<T> buf, int reqCapacity) {
+        MyPoolChunk<T> chunk = newUnpooledChunk(reqCapacity);
+        buf.initUnPooled(chunk, reqCapacity);
+    }
+
+
+    private void allocateNormal(MyPooledByteBuf<T> buf, int reqCapacity, MySizeClassesMetadataItem sizeIdx) {
+        // 优先从050的PoolChunkList开始尝试分配，尽可能的复用已经使用较充分的PoolChunk。如果分配失败，就尝试另一个区间内的PoolChunk
+        // 分配成功则直接return快速返回
+        if (q050.allocate(buf, reqCapacity, sizeIdx)){
+            return;
+        }
+        if (q025.allocate(buf, reqCapacity, sizeIdx)){
+            return;
+        }
+        if (q000.allocate(buf, reqCapacity, sizeIdx)){
+            return;
+        }
+        if (qInit.allocate(buf, reqCapacity, sizeIdx)){
+            return;
+        }
+        if (q075.allocate(buf, reqCapacity, sizeIdx)){
+            return;
+        }
+
+        // 所有的PoolChunkList都尝试过了一遍，都没能分配成功，说明已经被创建出来的，所有有剩余空间的PoolChunk空间都不够了(或者最初阶段还没有创建任何一个PoolChunk)
+
+        // MyNetty对sizeClass做了简化，里面的规格都是写死的，所以直接从sizeClass里取
+        int pageSize = this.mySizeClasses.getPageSize();
+        int nPSizes = this.mySizeClasses.getNPageSizes();
+        int pageShifts = this.mySizeClasses.getPageShifts();
+        int chunkSize = this.mySizeClasses.getChunkSize();
+
+        // 创建一个新的PoolChunk，用来进行本次内存分配
+        MyPoolChunk<T> c = newChunk(pageSize, nPSizes, pageShifts, chunkSize);
+        c.allocate(buf, reqCapacity, sizeIdx);
+        // 新创建的PoolChunk首先加入qInit(可能使用率较高，add方法里会去移动到合适的PoolChunkList中(nextList.add))
+        qInit.add(c);
+    }  
+}
+```
+#####
+PoolChunkList内部将PoolChunk以双向链表的形式组织起来。allocate方法中从头结点开始依次遍历所有的PoolChunk，调用PoolChunk的allocate方法看其是否能满足本次分配(PoolChunk在下一小节解析)。  
+* 如果能满足需求，则返回true，并且判断分配完成后，当前PoolChunk的使用率是否超过了当前PoolChunkList的上限，如果超过了，则将其移动到后面使用率更高的PoolChunkList中去。
+* 如果不能满足需求，则返回false，意味着当前PoolChunkList内的所有Chunk都无法满足本次分配(也可能是一个PoolChunk都没有)。
+```java
+/**
+ * 参考Netty的PoolChunkList   
+*/
+public class MyPoolChunkList<T> {
+    // 。。。 已省略无关逻辑
+    
+    /**
+     * 当前chunkList所归属的Arena
+     * */
+    private final MyPoolArena<T> arena;
+
+    /**
+     * 最小空间使用率(百分比)
+     * */
+    private final int minUsage;
+
+    /**
+     * 最大空间使用率(百分比)
+     * */
+    private final int maxUsage;
+
+    /**
+     * 最大可用空间
+     * */
+    private final int maxCapacity;
+
+    /**
+     * PoolChunkList本质上是一个PoolChunk的链表，将同样使用率区间的PoolChunk给管理起来
+     * head就是这个PoolChunk链表的头节点
+     * */
+    private MyPoolChunk<T> head;
+
+    /**
+     * 最小空闲阈值(单位：字节)
+     * 如果当前ChunkList内所维护的PoolChunk的实际空闲字节低于了这个最小空闲阈值，就要将其移动下一个更充实的ChunkList中去(next)
+     * (比如从(25-75%)的利用率list => (50-100%)的那个list里去)
+     * */
+    private final int freeMinThreshold;
+
+    /**
+     * 最大空闲阈值(单位：字节)
+     * 如果当前ChunkList内所维护的PoolChunk的实际空闲字节高于了这个最大空闲阈值，就要将其移动上一个更空旷的ChunkList中去(prev)
+     * (比如从(25-75%)的利用率list => (1-50%)的那个list里去)
+     * */
+    private final int freeMaxThreshold;
+
+    /**
+     * 当前chunkList的后继list节点
+     * */
+    private final MyPoolChunkList<T> nextList;
+
+    /**
+     * 当前chunkList的前驱list节点
+     * 前驱节点仅在PoolArena的构造函数中进行更新，本质上也可以看作时final的(因为构造对象时必须按照顺序创建，无法同时指定一个节点的前驱和后继)
+     * */
+    private MyPoolChunkList<T> prevList;
+
+    MyPoolChunkList(MyPoolArena<T> arena, MyPoolChunkList<T> nextList, int minUsage, int maxUsage, int chunkSize) {
+        this.arena = arena;
+        this.nextList = nextList;
+        this.minUsage = minUsage;
+        this.maxUsage = maxUsage;
+
+        // 计算出最大可用空间，方便下面计算空闲空间阈值上下限
+        maxCapacity = calculateMaxCapacity(minUsage, chunkSize);
+
+        // 基于最大使用率maxUsage，计算出最小的剩余空间阈值
+        freeMinThreshold = (maxUsage == 100) ? 0 : (int) (chunkSize * (100.0 - maxUsage + 0.99999999) / 100L);
+        // 基于最小使用率minUsage，计算出最大的剩余空间阈值
+        freeMaxThreshold = (minUsage == 100) ? 0 : (int) (chunkSize * (100.0 - minUsage + 0.99999999) / 100L);
+    }
+
+    /**
+     * 基于最小使用率和chunkSize计算出当前chunkList中所包含的PoolChunk最大可用空间
+     */
+    private static int calculateMaxCapacity(int minUsage, int chunkSize) {
+        minUsage = minUsage0(minUsage);
+
+        if (minUsage == 100) {
+            // If the minUsage is 100 we can not allocate anything out of this list.
+            // 如果最小使用率都是100%了，那就没有额外空间可以继续分配了
+            return 0;
+        }
+
+        // Calculate the maximum amount of bytes that can be allocated from a PoolChunk in this PoolChunkList.
+        //
+        // As an example:
+        // - If a PoolChunkList has minUsage == 25 we are allowed to allocate at most 75% of the chunkSize because
+        //   this is the maximum amount available in any PoolChunk in this PoolChunkList.
+        return  (int) (chunkSize * (100L - minUsage) / 100L);
+    }
+
+    private static int minUsage0(int value) {
+        return max(1, value);
+    }
+
+    void setPrevList(MyPoolChunkList<T> prevList) {
+        this.prevList = prevList;
+    }
+
+    /**
+     * 向当前PoolChunkList申请分配内存
+     * @return true 分配成功
+     *         false 分配失败
+     * */
+    boolean allocate(MyPooledByteBuf<T> buf, int reqCapacity, MySizeClassesMetadataItem sizeClassesMetadataItem) {
+        if (sizeClassesMetadataItem.getSize() > maxCapacity) {
+            // 所申请的内存超过了当前ChunkList中Chunk单元的最大空间，无法分配返回false
+            return false;
+        }
+
+        for (MyPoolChunk<T> currentChunk = head; currentChunk != null; currentChunk = currentChunk.next) {
+            // 从head节点开始遍历当前Chunk链表，尝试进行分配
+            if (currentChunk.allocate(buf, reqCapacity, sizeClassesMetadataItem)) {
+                // 当前迭代的Chunk分配内存成功，空闲空间减少
+                // 判断一下分配后的空闲空间是否低于当前最小阈值
+                if (currentChunk.freeBytes <= freeMinThreshold) {
+                    // 分配后确实低于了当前ChunkList的最小阈值，将当前Chunk从原有的ChunkList链表中摘除
+                    // 尝试将其放入后面内存使用率更高的ChunkList里(不一定就能放入直接后继，如果一次分配了很多，可能会放到更后面的ChunkList里)
+                    remove(currentChunk);
+                    nextList.add(currentChunk);
+                }
+                // 分配成功，返回true
+                return true;
+            }
+        }
+
+        // 遍历了当前ChunkList中的所有节点，没有任何一个Chunk单元能够进行分配，返回false
+        return false;
+    }
+
+
+    private boolean move0(MyPoolChunk<T> chunk) {
+        if (prevList == null) {
+
+            // q000这个ChunkList是相对特殊的，prevList为null。在这个ChunkList中的Chunk如果低于了阈值，说明Chunk已经完全空闲了，返回false，在上层将Chunk直接销毁
+            return false;
+        }else{
+            // 将当前Chunk移动到空间使用率更低的ChunkList中(prev)
+            return prevList.move(chunk);
+        }
+    }
+
+    private boolean move(MyPoolChunk<T> chunk) {
+
+        // 如果当前chunk的空闲空间大于当前PoolChunkList的最大空闲空间阈值
+        if (chunk.freeBytes > freeMaxThreshold) {
+            // 尝试着将其往空间使用率更低的PoolChunkList里放
+            return move0(chunk);
+        }
+
+        // 当前chunk的空间使用率与当前PoolChunkList匹配，可以将其插入
+        add0(chunk);
+        return true;
+    }
+
+    void add(MyPoolChunk<T> chunk) {
+        // 如果当前chunk的空闲空间少于当前PoolChunkList的最小空闲空间阈值
+        if (chunk.freeBytes <= freeMinThreshold) {
+            // 尝试着将其往空间使用率更高的PoolChunkList里放
+            nextList.add(chunk);
+            return;
+        }
+
+        // 当前chunk的空间使用率与当前PoolChunkList匹配，可以将其插入
+        add0(chunk);
+    }
+
+    /**
+     * 将chunk节点插入到当前双向链表的头部
+     * */
+    void add0(MyPoolChunk<T> chunk) {
+        chunk.parent = this;
+        if (head == null) {
+            // 如果当前链表为空，则新插入的这个chunk自己当头结点
+            head = chunk;
+            chunk.prev = null;
+            chunk.next = null;
+        } else {
+            // 当前插入的chunk作为新的head头节点
+            chunk.prev = null;
+            chunk.next = head;
+            head.prev = chunk;
+            head = chunk;
+        }
+    }
+
+    /**
+     * 将当前节点从其所属的双向链表中移除
+     * */
+    private void remove(MyPoolChunk<T> currentNode) {
+        if (currentNode == head) {
+            // 如果需要摘除的是头结点，则令其next节点为新的head节点
+            head = currentNode.next;
+            if (head != null) {
+                // 如果链表不为空(老head节点存在next)，将老的head节点彻底从其next节点中摘除
+                head.prev = null;
+            }
+        } else {
+            // 是双向链表的非头结点，将其prev与next直接进行关联
+            MyPoolChunk<T> next = currentNode.next;
+            currentNode.prev.next = next;
+            if (next != null) {
+                next.prev = currentNode.prev;
+            }
+        }
+    }
+}
+```
+### PoolChunk解析

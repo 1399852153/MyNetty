@@ -31,7 +31,7 @@ public abstract class MyPoolArena<T> {
         int chunkSize = this.mySizeClasses.getChunkSize();
 
         // 从小到大，使用率区间相近的PoolChunkList进行关联，组成双向链表(使用率区间有重合，论文中提到是设置磁滞效应，避免使用率小幅波动时反复移动位置，以提高性能)
-        // qInit <=> q000(1%-50%) <=> q025(25%-75%) <=> q050(50%-100%) <=> q075(75%-100%) <=> q100(100%)
+        // qInit <=> q000[1%-50%) <=> q025[25%-75%) <=> q050[50%-100%) <=> q075[75%-100%) <=> q100(100%)
         this.q100 = new MyPoolChunkList<T>(this, null, 100, Integer.MAX_VALUE, chunkSize);
         this.q075 = new MyPoolChunkList<T>(this, q100, 75, 100, chunkSize);
         this.q050 = new MyPoolChunkList<T>(this, q075, 50, 100, chunkSize);

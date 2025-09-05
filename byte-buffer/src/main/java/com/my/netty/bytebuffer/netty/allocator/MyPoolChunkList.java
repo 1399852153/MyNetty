@@ -5,6 +5,9 @@ import com.my.netty.bytebuffer.netty.MyPooledByteBuf;
 
 import static java.lang.Math.max;
 
+/**
+ * 参考Netty的PoolChunkList
+ */
 public class MyPoolChunkList<T> {
 
     /**
