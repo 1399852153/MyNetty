@@ -461,7 +461,7 @@ public class MyPoolChunk<T> {
                 // 合并成一个新的，更大的内存段(offset以前一段内存的offset为准，大小为两个run的和，inUsed=0代表未分配)
                 currentHandle = toRunHandle(pastOffset, pastPages + runPages, 0);
 
-                // 这个过程可以循环往复多次，反复合并，所以是循环处理
+                // 这个过程可以循环往复多次，反复合并，所以是循环处理(什么时候会反复合并？没想通)
             } else {
                 // 无法再继续合并了
                 return currentHandle;

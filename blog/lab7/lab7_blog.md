@@ -1329,7 +1329,7 @@ Netty参考了内核分配中的Buddy伙伴算法，使用handle作为元数据�
   // u: isUsed?, 1bit(接着1位标识着是否已被使用)  
   // e: isSubpage?, 1bit(接着1位标识着该run内存段是否为用于small类型分配的subPage)  
   // b: bitmapIdx of subpage, zero if it's not subpage, 32bit(最后32位标识着subPage是否使用的位图，如果isSubpage=0，则则全为0)  
-  在lab7中，我们暂时只实现了Normal级别的内存分配，因此重点关注前面4个字段属性即可。
+  在lab7中，我们暂时只实现了Normal级别的内存分配，因此重点关注前面4个字段属性即可。读写对应字段时，均采用位运算进行操作。
 * 一个PoolChunk在被创建时，基于Chunk大小和Page页大小被划分为了M个相同的大小的Page页(类似电影院的座位，每个座位就是一个Page页)。  
   第一个属性是runOffset，即当前内存段的起始位置在第几个Page页。    
   第二个属性是size，即handle所标识的连续内存段有多长，一共几个Page页大小(类似一家人买了个连号，都挨着坐一起)。    
@@ -1338,6 +1338,32 @@ Netty参考了内核分配中的Buddy伙伴算法，使用handle作为元数据�
 * 在PoolChunk刚被创建时，整个Chunk被视为一个完整的连续内存段，所以在构造方法中，构造了一个initHandle来标识这一整个内存段。
 ##### runsAvail
 在了解了handle的机制后，接下来要思考一个问题。每次Normal级别的分配可能是分配1个Page，也可能是分配2个、3个或者10个Page。那么如何才能以最快的速度找到isUsed=0的handle内存段，并尽可能的减少内存碎片呢？
+* PoolChunk中另一个关键的数据结构便是runsAvail数组，其内部存储的是LongPriorityQueue类型的对象。  
+  runsAvail中的每一项都对应一种特定大小的内存段，其中每一项的大小与SizeClasses中构建的pageIdx2sizeTab一一对应(因为最终申请的都是规范化后的大小)，比如第0项存放大小为1页的连续内存段，第1项存放大小为2页的连续内存段，依次类推，第31项存放的是大小为512页的连续内存段。   
+  PoolChunk被创建初始化时，initHandle作为规格最大的连续内存段(如果PoolChunk有512页，则initHandle对应的连续内存段大小也为512)，被放在了runAvail数组的最后一项对应的LongPriorityQueue中。  
+* 当需要分配内存时(runFirstBestFit方法)，会从最小的能满足当前申请大小的项开始遍历runsAvail，比如要申请3*8KB(3页)时，就从第2项开始从小到大的查找。  
+  如果当前项对应的LongPriorityQueue不为空，说明存在对应规格的空闲内存段可供分配。如果当前项LongPriorityQueue为空，则一直往后查找。  
+  特别的，如果遍历完整个runAvail数组，都没有发现不为空的LongPriorityQueue项，说明当前PoolChunk无法满足当前内存申请的分配，分配失败，allocate方法返回false。  
+* 使用LongPriorityQueue而不是普通的Long类型集合(比如List)来存储空闲handle的原因在于尽可能的减少内存碎片，让被分配的内存段之间的空隙更少。  
+  在有多个相同大小的run可供使用时，优先分配runOffset偏移值更小的run能够让实际分配出去的内存段更加有序，排布更加紧凑，减少空间足够但空闲内存段之间不连续而导致分配失败的场景。
+##### Normal级别内存申请分配
+* allocateRun方法先通过runsAvailLock对runAvail进行加锁防止并发更新，然后通过runFirstBestFit方法找到最小的，能进行分配的连续内存段。  
+  runFirstBestFit返回-1，则直接返回，代表分配失败。
+* runFirstBestFit成功找到可用的连续内存段，则将该内存段对应的handle先从runAvail数组中摘除。然后计算分配完成后，对应空闲run剩余的可用页数量。  
+  如果恰好分配完成，则仅需将对应的run的isUsed设置为1即可。但大多数时候并不会正好分完，而是会剩余一部分。  
+  此时，基于原handle中得偏移量和大小，以及当前分配出去得内存页大小，可以计算出来剩余的空闲内存段的对应偏移量以及大小，生成一个对应的新handle后将其加入到对应规格的runAvail中去。
+* runAvail中存储的handle的实际大小与对应下标规格并不是完全相等的，而是可能大于。比如一个新的PoolChunk在完成一个8KB(1页)大小的分配后，空闲的run会从第31项转移到第30项中。第31项代表规格为512页，而第30项代表规格为448页，而空闲run的大小实际为511页。  
+  但由于所有的内存申请都是经过SizeClasses规范化处理的，所申请的大小要么是512页，要么是448页，而不会出现介于其中的比如498页这样的请求。  
+  因此位于第30项的空闲runAvail能满足448页以及更小规格的申请，同时也能正确的拒绝掉512页大小的内存申请(可用内存不足)，依然能正确的完成工作。
+* allocateRun如果分配成功，最终会返回被分配出去的那段连续内存段的handle，并且在initBuf中将其与PooledByteBuf对象进行绑定。
+  PooledByteBuf对象初始化时，底层数组就是PoolChunk中所维护那块内存，并且在读写时通过计算出来的偏移量进行转换，确保最终实际读写的指针位置与PoolChunk中所分配出去的那块内存相匹配。
+##### Normal级别内存释放归还
+PooledByteBuf的deallocate中，通过调用对应PoolArena的free方法进行池化内存的释放。其中PoolChunk的free方法，基本上是进行分配时操作的逆向操作。  
+* 首先，将之前分配出去的handle中的isUsed设置为0，允许其被分配给其它PooledByteBuf。
+* 其次，通过collapseRuns方法，尝试将当前内存段与其前后直接相邻的内存段进行合并。如果其前面，或者后面直接相邻的空闲内存段存在，则将其和直接相邻的空闲内存段合并为一个更大的空闲连续内存段。合并之后的内存段能够满足更大规格的内存分配请求。
+* PoolChunk中维护了一个**runsAvailMap**，其起到了一个索引的作用。在一个handle被加入到runsAvail数组时，也会将其头、尾页偏移量放入runsAvailMap(一个handler对应两项(insertAvailRun0两次))。  
+  有了runsAvailMap后，便能够在尝试合并相邻内存段时，以O(1)的时间复杂度查找到相邻的空闲内存段是否存在，而不用去遍历整个runAvail数组。
+##### MyNetty PoolChunk实现源码
 ```java
 /**
  * 内存分配chunk
@@ -1791,7 +1817,7 @@ public class MyPoolChunk<T> {
                 // 合并成一个新的，更大的内存段(offset以前一段内存的offset为准，大小为两个run的和，inUsed=0代表未分配)
                 currentHandle = toRunHandle(pastOffset, pastPages + runPages, 0);
 
-                // 这个过程可以循环往复多次，反复合并，所以是循环处理
+                // 这个过程可以循环往复多次，反复合并，所以是循环处理(什么时候会反复合并？没想通)
             } else {
                 // 无法再继续合并了
                 return currentHandle;
@@ -1822,7 +1848,7 @@ public class MyPoolChunk<T> {
                 // 合并成一个新的，更大的内存段(offset以前当前offset为准，大小为两个run的和，inUsed=0代表未分配)
                 handle = toRunHandle(runOffset, runPages + nextPages, 0);
 
-                // 这个过程和collapsePast一样，同样可以循环往复多次，反复合并，所以是循环处理
+                // 这个过程和collapsePast一样，同样可以循环往复多次，反复合并，所以是循环处理(什么时候会反复合并？没想通)
             } else {
                 return handle;
             }
