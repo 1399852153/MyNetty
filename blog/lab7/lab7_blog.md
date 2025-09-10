@@ -1,6 +1,7 @@
 # 从零开始实现简易版Netty(七) MyNetty 实现Normal规格的池化内存分配
 ## 1. Netty池化内存分配介绍
-在上一篇博客中，lab6版本的MyNetty中实现了一个简易的非池化ByteBuf容器，池化内存分配是netty中非常核心也非常复杂的一个功能，没法在一次迭代中完整的实现，MyNetty打算分为4个迭代逐步的将其实现。按照计划，lab7版本的MyNetty需要实现Normal规格的内存分配。  
+在上一篇博客中，lab6版本的MyNetty中实现了一个简易的非池化ByteBuf容器，池化内存分配是netty中非常核心也非常复杂的一个功能，没法在一次迭代中完整的实现，MyNetty打算分为4个迭代逐步的将其实现。  
+按照计划，lab7版本的MyNetty需要实现Normal规格的内存分配。  
 由于本文属于系列博客，读者需要对之前的博客内容有所了解才能更好地理解本文内容。
 * lab1版本博客：[从零开始实现简易版Netty(一) MyNetty Reactor模式](https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)
 * lab2版本博客：[从零开始实现简易版Netty(二) MyNetty pipeline流水线](https://www.cnblogs.com/xiaoxiongcanguan/p/18964326)
@@ -26,11 +27,11 @@
   _"Application threads are assigned arenas in round-robin fashion upon first allocating a small/large object. Arenas are completely independent of each other. They maintain their own chunks, from which they carve page runs for small/large objects."_  
   _"应用线程在首次分配small或large对象时，使用round-robin轮训为其分配一个arena。不同的Arena彼此之间完全独立。Arena维护独属于它自己的Chunk集合，从中切割出连续的页段用于分配small或large对象。"_
 * Netty参考jemalloc也实现了Arena与线程的绑定关系，并且通过FastThreadLocal实现了ByteBuf线程缓存的能力。  
-  因为Arena与线程是一对多的关系，通过Arena来分配池化内存，必然会因为要变更Arena的内部元数据(trace metadata)而加锁防并发。通过线程级别的池化能力，可以以略微增加内存碎片的代价，减少同步竞争而大幅增加池化内存分配的吞吐量。    
+  因为Arena与线程是一对多的关系，通过Arena来分配池化内存，必然会因为要变更Arena的内部元数据(trace metadata)而需要加锁防并发。通过线程级别的池化能力，可以以略微增加内存碎片为代价，减少同步竞争而大幅增加池化内存分配的吞吐量。    
   _"The main goal of thread caches is to reduce the volume of synchronization events."_  
   _"引入线程缓存的主要目的是减少同步事件的量。"_
-* MyNetty中分为3个迭代来完成池化ByteBuf的功能，线程缓存的功能被放在了最后一个迭代，也就是lab9中去实现。
-  在本篇博客，也就是lab7中，MyNetty聚焦于PoolArena的内部实现，所以直接简单的设置所有线程共用同一个PoolArena。并且与lab6一致，简单起见只实现HeapByteBuf相关的池化，不考虑DirectByteBuf的池化功能。
+* MyNetty中分为3个迭代来完成池化ByteBuf的功能，线程缓存的功能被放在了最后一个迭代，也就是lab9中去实现。  
+  在本篇博客(lab7)，MyNetty聚焦于PoolArena的内部实现，所以直接简单的设置所有线程共用同一个PoolArena。并且与lab6一致，简单起见只实现了HeapByteBuf相关的池化，不考虑DirectByteBuf相关的功能。
 #####
 ```java
 public abstract class MyAbstractByteBufAllocator implements MyByteBufAllocator{
@@ -89,11 +90,11 @@ public class MyPooledByteBufAllocator extends MyAbstractByteBufAllocator{
     }
 }
 ```
-##### 2.2 从ByteBuf对象池中获取ByteBuf对象
-* PoolArena中实际生成可用的PooledByteBuf的方法中，只做了两件事情。  
-  首先是从ByteBuf的对象池中获得一个ByteBuf对象，然后再为这个对象的底层数组分配与所申请大小相匹配的内存。本小节，我们主要探讨前一个操作。
-* 获取ByteBuf对象逻辑是在PooledHeapByteBuf.newInstance方法中，通过一个全局的ObjectPool对象池来获得的(RECYCLER.get())。  
-  获取到一个可用的ByteBuf对象后，通过PooledHeapByteBuf的reuse方法，将自身内部的读写指针等内部属性都重新初始化一遍，避免被污染。
+##### 2.2 从对象池中获取ByteBuf对象
+* PoolArena中生成可用PooledByteBuf的方法中，只做了两件事情。  
+  首先是从ByteBuf的对象池中获得一个ByteBuf对象，然后再为这个对象的底层数组分配相匹配的内存。本小节，我们主要探讨前一个操作。
+* 获取ByteBuf对象逻辑是在PooledHeapByteBuf.newInstance方法中，通过一个全局的ObjectPool对象池来获得(RECYCLER.get())。  
+  获取到一个可用的ByteBuf对象后，通过PooledHeapByteBuf的reuse方法，将自身内部的读写指针等内部属性重新初始化一遍，避免被之前的数据污染。
 ```java 
 public class MyPoolArena{
     // 。。。 已省略无关逻辑
@@ -164,17 +165,18 @@ public abstract class MyPooledByteBuf<T> extends MyAbstractReferenceCountedByteB
 下面我们来分析ByteBuf对象池的内部工作原理。作为一个对象池，我们主要关注获取对象与归还对象两部分的逻辑。
 ##### 获取对象
 * 获取对象的逻辑入口在Recycler类的get方法。jemalloc的论文中提到，线程本地缓存在减少同步竞争的同时，也会增加内存碎片，因此netty中不允许线程不加节制的缓存ByteBuf对象。  
-  netty允许通过系统参数io.netty.recycler.maxCapacityPerThread来配置每个线程所能缓存的最大ByteBuf对象数量。特别的当其为0时，则代表ByteBuf不使用线程缓存，每次获取都创建一个新的对象。
+  netty允许通过系统参数io.netty.recycler.maxCapacityPerThread来配置每个线程所能缓存的最大ByteBuf对象数量。特别的，当其为0时则代表ByteBuf不使用线程缓存，每次获取都创建一个新的对象。
 * 每个线程的本地缓存存储在FastThreadLocal类型的LocalPool中，LocalPool内部持有了一个MessagePassingQueue队列来存放池化对象。  
   MessagePassingQueue是一个线程安全的队列，特别适合于**多写单读**的场景。因为每个线程都只通过独属于线程自己的LocalPool获取池化对象，但最终释放并归还池化对象的线程可以是任意线程，因此使用MessagePassingQueue是性能最佳的。  
   这一点与jemalloc获取与释放池化内存的逻辑是一致的。_“Freed memory is always returned to the arena from which it came, regardless of which thread performs the deallocation.”_
 * 通过线程缓存维护池化对象是一种用于提升吞吐量的机制，其并非万能药。在对性能要求不高的场景中，无脑的进行线程缓存会浪费内存。  
   因此，netty中默认只有FastThreadLocalThread这种netty中独有的线程类型才进行缓存，但也可以通过配置系统参数(io.netty.recycler.batchFastThreadLocalOnly=false)允许所有类型的线程都进行缓存。  
-* 获取对象时，LocalPool可能为空，不一定能获取到可用的池化对象。这时便需要new一个新的池化对象出来。netty中引入了一个分配因子，在所有的new新对象的申请中，默认只有一小部分(1/8)的请求会生成池化对象，而大部分情况下生成的都是无需池化，即释放时不归还到对象池中的普通对象(NOOP_HANDLE)。  
-  **这样做的目的是为了希望在分配对象的吞吐量与内存碎片之间获得一个平衡，让空间与时间的取舍达到一个相对的平衡点。**
+* 获取对象时，LocalPool可能为空，不一定能获取到可用的池化对象。这时便需要new一个新的池化对象出来。  
+  netty中引入了一个分配因子，在所有的new新对象的申请中，默认只有一小部分(1/8)的请求会生成池化对象，而大部分情况下生成的都是无需池化，即释放时不归还到对象池中的普通对象(NOOP_HANDLE)。  
+  **这样做的目的是希望在分配对象的吞吐量与内存碎片之间获得一个平衡，让空间与时间的取舍达到相对的平衡。**
 ##### 归还对象
 * 生成池化对象时，会将一个Handle对象通过构造函数注入给池化对象(比如PooledByteBuf)，而后在池化对象被释放时(比如PooledByteBuf的deallocate方法)，通过Handle的recycle方法将该对象归还到所属的对象池中。
-#####
+##### 获取池化对象流程图
 ![Recycler示意图.png](Recycler示意图.png)
 #####
 ```java
@@ -602,7 +604,7 @@ public enum SizeClassEnum {
 #####
 而netty参考了jemalloc，同样将规格分为了对应的三类，即Small、Normal和Huge。默认情况下，Small与Normal的分界线不是4KB,而是8KB。  
 * Huge类型分配：默认情况下大于4MB的PooledByteBuf分配，视为Huge规格。因为其占用空间过大，且实际使用场景很少，所以对于Huge类型的申请，netty不进行内存池化，而是每次都临时的申请新的内存来满足需求，以减少内存碎片。  
-* Normal类型分配：默认情况下[8KB，4MB]大小区间内的PooledByteBuf分配，视为Normal规格。netty参考linux内核的伙伴分配算法，通过管理以页(默认1页8KB)为最小单位的连续内存页段(run)的方式进行维护。
+* Normal类型分配：默认情况下[8KB，4MB]大小区间内的PooledByteBuf分配，视为Normal规格。netty参考linux内核的伙伴算法，通过管理以页(默认1页8KB)为最小单位的连续内存页段(run)的方式进行空闲内存的追踪与维护。
 * Small类型分配：默认情况下小于8KB的PooledByteBuf分配，被视为Small规格。netty参考linux内核的slab内存分配算法，通过管理一系列固定大小的内存对象槽集合的方式，管理待分配的池化内存。
 #####
 为什么linux内核和netty都要基于实际申请的内存大小划分规格，并区别对待呢？我们留到下一篇博客介绍完small类型分配工作原理后统一进行分析。   
@@ -611,11 +613,16 @@ public enum SizeClassEnum {
 Netty的SizeClasses主要做了两件事，一个是计算出所申请内存的规格级别(Small、Normal还是Huge)，另一个则是规范化所申请的内存大小。  
 怎么理解规范化呢？无论是伙伴算法，还是slab算法，出于减少内存碎片的考虑，无法为任意字节大小的内存申请都预先池化恰好等于所申请大小的规格。  
 举个例子，假如用户要申请14kb大小的内存，又要申请11kb大小的内存，要想恰好满足用户的需求，则需要预留N个14kb的内存块和M个11kb的内存块。
-而用户实际会申请的内存大小是几乎不可枚举的，所以只能对其申请的内存大小进行规范化(通常是2次幂)。比如申请11和14kb都将其规范化为满足其大小的最小的2次幂，即16；而如果要申请的内存为28kb，则规范化为32等等。  
+而用户实际会申请的内存大小的可能性是几乎不可枚举的，所以只能对其申请的内存大小进行规范化。比如申请11和14kb都统一将其规范化为满足其大小前提下最小的规格，比如16；而如果要申请的内存为28kb，则规范化为32等等。  
 #####
-netty和jemalloc一样，都以2次幂设计了一系列的规格，用以规范化内存申请大小。总的来说，规格越小，则规格的排布就越密集，比如16,32,48,64，每个间隔仅为16；而到了512时则是640，768，896，1024，每个间隔扩大到了128。  
+netty和jemalloc一样，都以2的倍数为基础设计了一系列的规格，用以规范化内存申请大小。总的来说，规格越小，则规格的排布就越密集，比如16,32,48,64，每个间隔仅为16；而到了512时则是640，768，896，1024，每个间隔扩大到了128。  
 jemalloc的论文中提到之所以这样设计，是为了平衡内部碎片与外部碎片，当申请14kb而实际分配规范化后的16kb池化内存时，就有2kb的内部碎片无法使用；而对应规格的池化内存如果因为使用率较低的话，则会产生大量外部碎片。  
-绝大多数的应用在申请内存时，较小的内存大小的申请是远多于大内存的。假如512的大小下，依然以16为间隔进行划分，那么恰好申请512-528字节的可能性相对16-32字节区间就低太多了。这样即使在处理540字节的申请时，并实际分配640字节而造成100字节的内部碎片，所带来的总内存碎片量依然低得多。
+绝大多数的应用在申请内存时，较小的内存大小的申请是远多于大内存的。假如512的大小下，依然以16为间隔进行划分，那么恰好申请512-528字节的可能性相对16-32字节区间就低太多了。这样即使在处理540字节的申请时，并实际分配640字节而造成100字节的内部碎片，所带来的总内存碎片量依然低得多。  
+#####
+_Carefully choose size classes (somewhat inspired by Vam). If size classes are spaced far apart, objects will tend to have excessive unusable trailing space (internal fragmentation).  
+As the size class count increases, there will tend to be a corresponding increase in unused memory dedicated to object sizes that are currently underutilized (external fragmentation)._  
+精心设计规格等级(部分灵感来自于Vam)。如果不同规格等级之间差距过大，对象尾部将会产生过多的不可使用的空间(内部碎片)。  
+而随着规格等级数量的增加，又会导致专门服务于某一使用率较低的规格大小的内存空间闲置(外部碎片)。
 ##### MySizeClasses源码实现
 ```java
 /**
@@ -950,15 +957,16 @@ public class MySizeClasses {
 #####
 Netty中为了支持动态的设置Normal页单位的大小，实现了一套复杂的算法来计算每一个规格区间动态的生成sizeIdx2sizeTab等规格表。而MyNetty的实现中，简单起见直接以默认的页大小(8Kb)在构造函数中直接写死了sizeTable数组中每个规范化的规格大小和对应级别，方便读者理解。  
 下面我们重点关注size2SizeIdx方法，这个方法传入实际申请的大小，返回规范化后的规格和对应的级别(比如540规范化为640(small)，10001规范化为10240(Normal)等等)。  
-如果没有看过Netty的实际实现，读者可能会觉得内部是通过二分查找来实现的(对数时间复杂度)。但netty认为内存分配操作是一个高频操作，对数的时间复杂度还不够快。通过精心设计的规范化间隔，使得能够以常数时间复杂度完成规范化计算。  
+如果没有看过Netty的实际实现，读者可能会觉得规范化的功能其内部是通过二分查找来实现的(对数时间复杂度)。但netty认为内存分配操作是一个高频操作，对数的时间复杂度还不够快。通过精心设计的规格间距，使得能够以常数时间复杂度完成规范化计算。  
 * 首先，默认情况下对于小于lookupMaxSize规格(默认4096)的大小申请，netty单独设计了一个索引表size2idxTab，为范围内每一个2次幂(除以4)对应的规范化规格进行了索引。所以通过位运算可以直接定位到对应的规格(size2idxTab[size - 1 >> LOG2_QUANTUM])。  
-* 随着规格越来越大，如果继续使用size2idxTab来生成索引其耗费的空间会指数级增加，因此对于大小超过lookupMaxSize的申请则通过巧妙的规格分组结合位运算来进行规范化计算。
+* 随着规格越来越大，如果继续使用size2idxTab来生成索引其耗费的空间会指数级增加，因此对于大小超过lookupMaxSize的申请则通过巧妙的规格分组结合位运算来进行规范化计算。  
   简单来说，netty将规格进行分组，每个分组内共4个规格，组内的规格间距相同；相邻组之间的间隔(即更小组中的最大项与更大组中的最小项)则随着组别的增加，有规律的扩大。  
-  在MyNetty的构造方法中，结合注释可以很清楚的看到这一规律。正是这一规律，使得netty可以通过一系列巧妙的运算，在不使用索引表的情况下，仍然可以用常数的时间复杂度完成规范化计算。
+  在上述MySizeClasses的构造方法中，结合注释可以很清楚的看到这一规律。这使得netty可以通过一系列巧妙的运算，在不使用索引表的情况下，仍然可以用常数的时间复杂度完成规范化计算。  
 * 对于小于lookupMaxSize大小的申请，一次简单的位操作可以直接完成计算，索引表浪费空间但能节约时间。而对于大于lookupMaxSize小于ChunkSize的申请，通过几次运算后也能在常数复杂度内完成，时间复杂度大O相同但小O更大。  
   考虑到小于lookupMaxSize的小内存申请数通常远多于超过lookupMaxSize的大内存申请数。可以说，netty在规范化计算的实现上，很好的平衡了时间与空间。
 #####
-看到这里，读者应该可以理解为什么Netty的SizeClasses的构造方法中要实现的那么复杂，里面各种的分组，各种的logXXX的变量。其最重要的目的就是为了实现常数复杂度的规范化计算以及动态的页大小设置，同时尽量减少其中各种索引元数据所占用的内存。
+看到这里，读者应该可以理解为什么Netty的SizeClasses的构造方法中要实现的那么复杂了吧(里面各种group分组和logXXX的变量)。  
+其最主要的目的就是实现常数复杂度的内存申请规范化计算并支持动态的页大小，同时尽量减少其中各种元数据所占用的内存。
 
 ### PoolChunkList工作原理解析
 PoolChunk是Netty中分配内存的基本单元，Chunk就是一大块内存的意思，在使用时会按照需求有机切割为一些不同大小的连续内存段以供使用。默认情况下，ChunkSize为4MB。  
@@ -968,13 +976,14 @@ Netty参考jemalloc将PoolChunk按照内部的空间利用率有机的组织起�
 ![PoolChunkList.png](PoolChunkList.png)
 #####
 下面我们结合源码看看Netty是如何进行Normal类型的内存分配的。
-* PoolArena按照内存使用率区间划分了6个PoolChunkList，分别是qInit、q000[1%-50%)、q025[25%-75%)、q050[50%-100%)、q075[75%-100%)、q100(100%)。 
+* PoolArena按照内存使用率区间划分了6个PoolChunkList，分别是qInit、q000[1%-50%)、q025[25%-75%)、q050[50%-100%)、q075[75%-100%)、q100(100%)。   
   按照使用率的大小，以双向链表的形式组织了起来，刚被创建的PoolChunk会被放入qInit，随着后续内存的分配与回收，如果PoolChunk的使用率超过了所在PoolChunkList的上限或下限，则会被移动到满足其使用率范围的最临近的那个PoolChunkList中。  
   可以注意到，不同的PoolChunkList的使用率区间是存在重合的，q000中的PoolChunk如果内存使用率从10%变为了40%，并不会被立即移动到q025中。  
   这样设计的目的是为了避免位于区间临界点的PoolChunk因为频繁的分配和回收，而反复的在不同PoolChunkList中迁移，以提高效率。
-* 出于减少内存碎片的考虑，PoolArena与线程的关系是1对N的，所以访问PoolArena是可能出现并发的。为了保护分配时元数据的变更，实际分配前使用PoolArena读熟的互斥锁进行了加锁操作(tcacheAllocateNormal方法)。
+* 出于减少内存碎片的考虑，PoolArena与线程的关系是1对N的，所以访问PoolArena是可能出现并发的。为了保护分配时元数据的变更，实际分配前使用当前PoolArena专属的互斥锁执行加锁操作(tcacheAllocateNormal方法)。
 * 在allocateNormal方法中，可以看到按照顺序依次尝试从q050、q025、q000、qInit和q075这些使用率不满100%的PoolChunkList中进行分配，如果分配成功则会提前返回。  
-  如果所有的PoolChunkList都无法满足当前的分配请求，则会新创建一个空的PoolChunk进行分配，并将这个新的PoolChunk放入qInit中。
+  如果所有的PoolChunkList都无法满足当前的分配请求，则会新创建一个空的PoolChunk进行分配，并将这个新的PoolChunk放入qInit中。    
+  这种尝试顺序可以在确保足够分配成功率的前提下，尽量让每一个PoolChunk都保持较高的空间使用率。
 #####
 ```java
 /**
@@ -1049,8 +1058,6 @@ public abstract class MyPoolArena<T> {
     }
 
     private void tcacheAllocateNormal(MyPooledByteBuf<T> buf, final int reqCapacity, final MySizeClassesMetadataItem sizeClassesMetadataItem) {
-        // todo 基于线程本地缓存获取，暂不实现
-
         lock();
         try {
             // 加锁处理，防止并发修改元数据
@@ -1316,11 +1323,11 @@ public class MyPoolChunkList<T> {
 }
 ```
 ### PoolChunk工作原理解析
-现在来分析整个Normal级别内存分配最核心的部分，即PoolChunk。PoolChunk是一个完整的连续内存块，但却要同时满足不同大小的内存分配，因此如何标识和追踪块中哪部分的内存已经被分配，哪部分的内存空闲可供分配便是PoolChunk的重中之重。  
+现在来分析Normal级别内存分配中最核心的组件，即PoolChunk。PoolChunk是一个完整的连续内存块，但却要同时满足不同大小的内存分配，因此如何高效的标识和追踪块中哪部分的内存已被分配，哪部分的内存空闲可供分配便是PoolChunk的重中之重。  
 PoolChunk中将页(Page)作为内存分配的最小单元，对于Normal级别的内存分配，本质就是分配1个或多个连续的Page页(run)。对于PoolChunk来说，分配时通过修改其元数据，将被分配出去的Page页标明为已分配；而内存被释放时，则将对应的Page页由已分配改为空闲、待分配的状态即可。  
 同时出于性能的考虑，一次内存分配所划分出去的多个Page页内存必须是连续的，因此PoolChunk的元数据除了要追踪分配出去的页面的数量，也必须明确的追踪到各个页之间的连续性。
 ##### handle
-Netty参考了内核分配中的Buddy伙伴算法，使用handle作为元数据标识一段连续内存段。  
+Netty中使用handle作为元数据，标识一段连续内存段。  
 * handle是一个long类型的64位的变量，在逻辑上按照位数被划分为了5个不同的字段属性。
   // a handle is a long number, the bit layout of a run looks like：(一个handle是一个long类型的数字，其bit位布局如下所述)  
   // oooooooo ooooooos ssssssss ssssssue bbbbbbbb bbbbbbbb bbbbbbbb bbbbbbbb  
@@ -1329,15 +1336,15 @@ Netty参考了内核分配中的Buddy伙伴算法，使用handle作为元数据�
   // u: isUsed?, 1bit(接着1位标识着是否已被使用)  
   // e: isSubpage?, 1bit(接着1位标识着该run内存段是否为用于small类型分配的subPage)  
   // b: bitmapIdx of subpage, zero if it's not subpage, 32bit(最后32位标识着subPage是否使用的位图，如果isSubpage=0，则则全为0)  
-  在lab7中，我们暂时只实现了Normal级别的内存分配，因此重点关注前面4个字段属性即可。读写对应字段时，均采用位运算进行操作。
-* 一个PoolChunk在被创建时，基于Chunk大小和Page页大小被划分为了M个相同的大小的Page页(类似电影院的座位，每个座位就是一个Page页)。  
+  在lab7中，我们暂时只实现了Normal级别的内存分配，而subpage是用于Small级别内存分配的，因此先重点关注前面4个字段属性即可。读写handle的对应字段时，均采用位运算进行操作。
+* 一个PoolChunk在被创建时，基于Chunk大小和Page页大小被划分为了M个相同大小的Page页(类似电影院的座位，每个座位就是一个Page页)。  
   第一个属性是runOffset，即当前内存段的起始位置在第几个Page页。    
   第二个属性是size，即handle所标识的连续内存段有多长，一共几个Page页大小(类似一家人买了个连号，都挨着坐一起)。    
   第三个属性是isUsed，是否使用。一个handle被分配出去了，isUsed=1；未被分配出去则isUsed=0。  
   第四个属性是isSubPage，是否是SubPage类型的内存段，用于Small级别的分配。在lab7中，所有的handle的isSubPage值都为0。  
-* 在PoolChunk刚被创建时，整个Chunk被视为一个完整的连续内存段，所以在构造方法中，构造了一个initHandle来标识这一整个内存段。
+* 在PoolChunk刚被创建时，整个Chunk被视为一个未被使用的、完整的连续内存段，所以在构造方法中，构造了一个initHandle来标识这一整个内存段。
 ##### runsAvail
-在了解了handle的机制后，接下来要思考一个问题。每次Normal级别的分配可能是分配1个Page，也可能是分配2个、3个或者10个Page。那么如何才能以最快的速度找到isUsed=0的handle内存段，并尽可能的减少内存碎片呢？
+在了解了handle的机制后，接下来要思考一个问题。每次Normal级别的分配可能是分配1个Page，也可能是分配2个、3个或者10个Page。那么如何才能以最快的速度找到isUsed=0且大小足够的handle内存段，并尽可能的减少内存碎片呢？
 * PoolChunk中另一个关键的数据结构便是runsAvail数组，其内部存储的是LongPriorityQueue类型的对象。  
   runsAvail中的每一项都对应一种特定大小的内存段，其中每一项的大小与SizeClasses中构建的pageIdx2sizeTab一一对应(因为最终申请的都是规范化后的大小)，比如第0项存放大小为1页的连续内存段，第1项存放大小为2页的连续内存段，依次类推，第31项存放的是大小为512页的连续内存段。   
   PoolChunk被创建初始化时，initHandle作为规格最大的连续内存段(如果PoolChunk有512页，则initHandle对应的连续内存段大小也为512)，被放在了runAvail数组的最后一项对应的LongPriorityQueue中。  
@@ -1345,18 +1352,18 @@ Netty参考了内核分配中的Buddy伙伴算法，使用handle作为元数据�
   如果当前项对应的LongPriorityQueue不为空，说明存在对应规格的空闲内存段可供分配。如果当前项LongPriorityQueue为空，则一直往后查找。  
   特别的，如果遍历完整个runAvail数组，都没有发现不为空的LongPriorityQueue项，说明当前PoolChunk无法满足当前内存申请的分配，分配失败，allocate方法返回false。  
 * 使用LongPriorityQueue而不是普通的Long类型集合(比如List)来存储空闲handle的原因在于尽可能的减少内存碎片，让被分配的内存段之间的空隙更少。  
-  在有多个相同大小的run可供使用时，优先分配runOffset偏移值更小的run能够让实际分配出去的内存段更加有序，排布更加紧凑，减少空间足够但空闲内存段之间不连续而导致分配失败的场景。
+  在有多个相同大小的run可供使用时，统一优先分配runOffset偏移值更小的run能够让实际分配出去的内存段更加有序，排布更加紧凑，减少空间足够但空闲内存段之间不连续而导致分配失败的场景。
 ##### Normal级别内存申请分配
 * allocateRun方法先通过runsAvailLock对runAvail进行加锁防止并发更新，然后通过runFirstBestFit方法找到最小的，能进行分配的连续内存段。  
   runFirstBestFit返回-1，则直接返回，代表分配失败。
 * runFirstBestFit成功找到可用的连续内存段，则将该内存段对应的handle先从runAvail数组中摘除。然后计算分配完成后，对应空闲run剩余的可用页数量。  
   如果恰好分配完成，则仅需将对应的run的isUsed设置为1即可。但大多数时候并不会正好分完，而是会剩余一部分。  
-  此时，基于原handle中得偏移量和大小，以及当前分配出去得内存页大小，可以计算出来剩余的空闲内存段的对应偏移量以及大小，生成一个对应的新handle后将其加入到对应规格的runAvail中去。
-* runAvail中存储的handle的实际大小与对应下标规格并不是完全相等的，而是可能大于。比如一个新的PoolChunk在完成一个8KB(1页)大小的分配后，空闲的run会从第31项转移到第30项中。第31项代表规格为512页，而第30项代表规格为448页，而空闲run的大小实际为511页。  
+  此时，基于原handle中得偏移量和大小，以及当前分配出去得内存页大小，可以计算出来剩余的空闲内存段的对应偏移量以及剩余大小，生成一个对应的新handle后将其加入到对应规格的runAvail中去。
+* runAvail中存储的handle的实际大小与对应下标规格并不是总是完全相等的，而是可能大于。比如一个新的PoolChunk在完成一个8KB(1页)大小的分配后，空闲的run会从第31项转移到第30项中。第31项代表规格为512页，而第30项代表规格为448页，而空闲run的大小实际为511页。  
   但由于所有的内存申请都是经过SizeClasses规范化处理的，所申请的大小要么是512页，要么是448页，而不会出现介于其中的比如498页这样的请求。  
-  因此位于第30项的空闲runAvail能满足448页以及更小规格的申请，同时也能正确的拒绝掉512页大小的内存申请(可用内存不足)，依然能正确的完成工作。
-* allocateRun如果分配成功，最终会返回被分配出去的那段连续内存段的handle，并且在initBuf中将其与PooledByteBuf对象进行绑定。
-  PooledByteBuf对象初始化时，底层数组就是PoolChunk中所维护那块内存，并且在读写时通过计算出来的偏移量进行转换，确保最终实际读写的指针位置与PoolChunk中所分配出去的那块内存相匹配。
+  因此位于第30项的空闲runAvail能满足448页以及更小规格的申请，同时也能正确的拒绝掉512页大小的内存申请(可用内存不足)。
+* allocateRun如果分配成功，最终会返回被分配出去的那段连续内存段的handle，并且在initBuf中将其与PooledByteBuf对象进行绑定。  
+  PooledByteBuf对象初始化时，底层数组就是PoolChunk中所维护那块内存，并且在读写时通过计算出来的偏移量进行转换，确保最终实际读写的指针位置与PoolChunk中所分配出去的那块连续内存地址相匹配。
 ##### Normal级别内存释放归还
 PooledByteBuf的deallocate中，通过调用对应PoolArena的free方法进行池化内存的释放。其中PoolChunk的free方法，基本上是进行分配时操作的逆向操作。  
 * 首先，将之前分配出去的handle中的isUsed设置为0，允许其被分配给其它PooledByteBuf。
@@ -1860,3 +1867,11 @@ public class MyPoolChunk<T> {
     }
 }
 ```
+## 总结
+* 在MyNetty的lab7中，实现了PooledByteBuf对象的池化功能，以及Normal规格的池化内存功能。并结合jemalloc的论文，解析其背后的设计原理。  
+  PooledByteBuf对象的池化功能基于一个轻量级的对象池实现，核心是本地线程缓存的LocalPool和多写单读的MessagePassingQueue。  
+  Normal规格的内存池化由SizeClasses、PoolArena、PoolChunkList和PoolChunk这几个组件合作完成。其中核心是SizeClasses中的规范化和PoolChunk中通过handle追踪连续内存段，以及连续内存段的拆分和合并逻辑。
+* lab7是MyNetty实现完整池化ByteBuf容器功能的第一个迭代，为后续实现Small规格内存池化以及池化内存的本地线程缓存打下了基础。相信在理解了MyNetty中简易版的池化内存实现后，能帮助读者后续更好的理解Netty中更为复杂，细节更多的池化内存功能。  
+* 最后强力推荐一下大佬的技术博客：[bin的技术小屋 谈一谈Netty的内存管理——且看Netty如何实现Java版的Jemalloc](https://www.cnblogs.com/binlovetech/p/18501999)，里面的内容全面且图文并茂，在我研究Netty池化内存原理的过程中给予了我非常大的帮助。
+#####
+博客中展示的完整代码在我的github上：https://github.com/1399852153/MyNetty (release/lab7_normal_allocate 分支)，内容如有错误，还请多多指教。

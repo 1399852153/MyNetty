@@ -1,5 +1,6 @@
 package com.my.netty.core.reactor.server;
 
+import com.my.netty.bytebuffer.netty.allocator.MyPooledByteBufAllocator;
 import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.codec.EchoMessageDecoder;
 import com.my.netty.core.reactor.codec.EchoMessageEncoder;
@@ -16,6 +17,7 @@ public class ServerDemo {
     public static void main(String[] args) throws IOException {
         DefaultChannelConfig defaultChannelConfig = new DefaultChannelConfig();
         defaultChannelConfig.setInitialReceiveBufferSize(16); // 设置小一点，方便测试
+        defaultChannelConfig.setAllocator(new MyPooledByteBufAllocator()); // 测试池化ByteBuf功能
 
         MyNioServerBootstrap myNioServerBootstrap = new MyNioServerBootstrap(
             new InetSocketAddress(8080),

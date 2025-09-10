@@ -17,6 +17,10 @@
         <module>byte-buffer</module>
     </modules>
 
+    <properties>
+        <slf4j.version>2.0.5</slf4j.version>
+    </properties>
+
     <build>
         <plugins>
             <plugin>

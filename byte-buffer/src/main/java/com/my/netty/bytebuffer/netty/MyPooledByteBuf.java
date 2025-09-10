@@ -4,6 +4,8 @@ package com.my.netty.bytebuffer.netty;
 import com.my.netty.bytebuffer.netty.allocator.MyByteBufAllocator;
 import com.my.netty.bytebuffer.netty.allocator.MyPoolChunk;
 import com.my.netty.bytebuffer.netty.objectpool.MyObjectPool;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -12,6 +14,8 @@ import java.nio.channels.GatheringByteChannel;
 import java.nio.channels.ScatteringByteChannel;
 
 public abstract class MyPooledByteBuf<T> extends MyAbstractReferenceCountedByteBuf{
+
+    private static final Logger logger = LoggerFactory.getLogger(MyPooledByteBuf.class);
 
     protected long handle;
     protected T memory;
@@ -33,7 +37,7 @@ public abstract class MyPooledByteBuf<T> extends MyAbstractReferenceCountedByteB
 
     public void init(MyPoolChunk<T> chunk, ByteBuffer nioBuffer,
                      long handle, int offset, int length, int maxLength) {
-        System.out.println("init MyPooledByteBuf chunk=" + chunk + " offset=" + offset);
+        logger.info("init MyPooledByteBuf, use chunk={},offset={}",chunk,offset);
 
         init0(chunk, nioBuffer, handle, offset, length, maxLength);
     }
@@ -75,6 +79,8 @@ public abstract class MyPooledByteBuf<T> extends MyAbstractReferenceCountedByteB
     @Override
     protected final void deallocate() {
         if (handle >= 0) {
+            logger.info("PooledByteBuf do deallocate handle={},chunk={}",handle,chunk);
+
             final long handle = this.handle;
             this.handle = -1;
             memory = null;

@@ -135,14 +135,20 @@ public abstract class MyPoolArena<T> {
         return parent;
     }
 
-    private void allocate(MyPooledByteBuf<T> buf, final int reqCapacity) {
-        final MySizeClassesMetadataItem sizeClassesMetadataItem = mySizeClasses.size2SizeIdx(reqCapacity);
+    private void allocate(MyPooledByteBuf<T> buf, int reqCapacity) {
+        // todo 因为暂时只实现了Normal规格的分配，为了保证正常工作，把SMALL规格的申请强行设置为Normal规格
+        if(reqCapacity < 8192){
+            reqCapacity = 8192;
+        }
+
+        MySizeClassesMetadataItem sizeClassesMetadataItem = mySizeClasses.size2SizeIdx(reqCapacity);
 
         switch (sizeClassesMetadataItem.getSizeClassEnum()){
             case SMALL:
+
                 // 暂不支持
                 throw new RuntimeException("not support small size allocate! reqCapacity=" + reqCapacity);
-                // tcacheAllocateSmall(buf, reqCapacity, sizeIdx);
+//                 tcacheAllocateSmall(buf, reqCapacity, sizeIdx);
             case NORMAL:
                 tcacheAllocateNormal(buf, reqCapacity, sizeClassesMetadataItem);
                 return;
