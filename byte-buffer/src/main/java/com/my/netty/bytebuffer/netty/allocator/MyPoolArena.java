@@ -111,7 +111,13 @@ public abstract class MyPoolArena<T> {
      * 释放回收属于当前PoolArena特定Chunk中的某个内存段
      * */
     public void free(MyPoolChunk<T> chunk, long handle, int normCapacity) {
-        freeChunk(chunk, handle, normCapacity);
+        if(chunk.unpooled){
+            // huge类型使用的chunk是unPooled非池化的
+            // 不需要去处理Chunk和ChunkList间的关系，也不用看释放后的占用率(因为huge类型的buf申请是完全独占整个chunk的)，被释放直接将chunk销毁即可
+            destroyChunk(chunk);
+        }else{
+            freeChunk(chunk, handle, normCapacity);
+        }
     }
 
     void freeChunk(MyPoolChunk<T> chunk, long handle, int normCapacity) {
