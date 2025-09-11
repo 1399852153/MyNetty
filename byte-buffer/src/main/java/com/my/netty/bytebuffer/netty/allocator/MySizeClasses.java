@@ -28,6 +28,11 @@ public class MySizeClasses {
     private final int nPageSizes;
 
     /**
+     * small类型的在size表中是第0到第38，共39个
+     * */
+    private final int nSubPage = 39;
+
+    /**
      * chunk大小直接写死，4M
      * */
     private final int chunkSize = 1024 * 1024 * 4;
@@ -41,7 +46,7 @@ public class MySizeClasses {
      * QUANTUM是量子的意思，即最小的规格 是16
      * LOG2_QUANTUM = (log2(16) = 4)
      * */
-    private final int LOG2_QUANTUM = 4;
+    public static final int LOG2_QUANTUM = 4;
 
     /**
      * 每一个规格组的大小固定为4，组内每一个size规格的间距是固定的
@@ -149,6 +154,11 @@ public class MySizeClasses {
 
         // 一个chunk就是4M，超过chunk级别的规格就是Huge类型了,这个是MyNetty额外加的一项
         sizeTable[68] = new MySizeClassesMetadataItem(0, SizeClassEnum.HUGE);
+
+        for(int i=0; i<sizeTable.length; i++){
+            // 记录一下每一项在size表中的下标(small分配的时候用于匹配对应的SubPage项)
+            sizeTable[i].setTableIndex(i);
+        }
 
         // 计算一共有多个个Page类型的规格(所有的规格，恰好是pageSize的倍数的就是Page类型的规格，比如8K，16K，24K以此类推)
         int nPageSizes = 0;
@@ -270,6 +280,10 @@ public class MySizeClasses {
 
     public int getNPageSizes() {
         return nPageSizes;
+    }
+
+    public int getNSubPage() {
+        return nSubPage;
     }
 
     public int getPageShifts() {
