@@ -11,6 +11,7 @@ public class MySizeClassesTest {
     public void testSize2SizeIdx() {
         MySizeClasses mySizeClasses = new MySizeClasses();
 
+        Assert.assertEquals(mySizeClasses.size2SizeIdx(0).getSize(), 16);
         Assert.assertEquals(mySizeClasses.size2SizeIdx(11).getSize(), 16);
         Assert.assertEquals(mySizeClasses.size2SizeIdx(15).getSize(), 16);
         Assert.assertEquals(mySizeClasses.size2SizeIdx(16).getSize(), 16);
