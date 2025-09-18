@@ -164,9 +164,11 @@ public abstract class MyPoolArena<T> {
 
         switch (sizeClassesMetadataItem.getSizeClassEnum()){
             case SMALL:
+                // small规格内存分配
                 tcacheAllocateSmall(buf, reqCapacity, sizeClassesMetadataItem);
                 return;
             case NORMAL:
+                // normal规格内存分配
                 tcacheAllocateNormal(buf, reqCapacity, sizeClassesMetadataItem);
                 return;
             case HUGE:
@@ -182,10 +184,6 @@ public abstract class MyPoolArena<T> {
 //            return;
 //        }
 
-        /*
-         * Synchronize on the head. This is needed as {@link PoolChunk#allocateSubpage(int)} and
-         * {@link PoolChunk#free(long)} may modify the doubly linked list as well.
-         */
         MyPoolSubPage<T> head = this.myPoolSubPages[sizeClassesMetadataItem.getTableIndex()];
         boolean needsNormalAllocation;
         head.lock();
@@ -203,7 +201,7 @@ public abstract class MyPoolArena<T> {
             head.unlock();
         }
 
-        // 需要申请一个新的PoolChunk来进行small类型的subPage分配
+        // 需要申请一个新的run来进行small类型的subPage分配
         if (needsNormalAllocation) {
             lock();
             try {
