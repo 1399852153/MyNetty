@@ -191,11 +191,11 @@ public abstract class MyPoolArena<T> {
 而新的PoolSubPage节点底层的内存空间，同样需要由PoolChunk中维护的连续内存段来承载，因此其绝大多数的逻辑都与Normal规格的分配类似，但一些关键的不同点需要着重介绍。  
 * PoolChunk处理PoolSubPage分配的入口同样是allocate方法，在allocateSubpage方法的实际分配操作前，会PoolSubPage头结点中的lock方法将对应规格的链表进行加锁，避免并发调整相关的元数据结构。  
 * PoolSubPage既然是使用连续内存段来承载内存空间，那么其大小同样是以Page页为单位，是页大小的整数倍。那么分配时，具体应该分配多大的内存段呢?  
-  jemalloc的论文中提到，内存管理中最重要的一点就是尽量减少内存碎片。因此，Netty中为PoolSubPage分配的连续内存段大小，取决于页大小与PoolSubPage对应small规格大小的最小公倍数(calculateRunSize方法)。    
+  jemalloc的论文中提到，内存管理中最重要的一点就是尽量减少内存碎片。因此，Netty中为PoolSubPage分配的连续内存页段大小，取决于页大小与PoolSubPage对应small规格大小的最小公倍数(calculateRunSize方法)。    
   一般情况下，small规格的申请会比较多，对应规格的PoolSubPage会被完全用完。那么，在PoolSubPage被装满时其底层数组能够被100%的使用，空间利用率更高，内部碎片更少。
 * 在计算出所需的连续内存段大小后，便与Normal规格内存分配一样，尝试从当前PoolChunk中切割出一块符合要求的连续内存段(如果无法分配，则返回-1分配失败，重新找过一个PoolChunk)。  
-  切割出的连续内存段与新创建的PoolSubPage对象进行绑定，在PoolSubPage的构造方法中，会将自己挂载到到对应规格的双向链表中。  
-  随后，从这个新的PoolSubPage中通过allocate方法分配一个handle以满足此次Small规格的内存分配。  
+  切割出的连续内存段与新创建的PoolSubPage对象进行绑定，在PoolSubPage的构造方法中，会将自己挂载到到对应规格的双向链表中。随后，从这个新的PoolSubPage中通过allocate方法分配一个handle以满足此次Small规格的内存分配。
+  同时，为了在free释放该small规格的handle内存段时能快速定位到对应的PoolSubPage，PoolChunk中还维护了一个PoolSubPage数组。在新的PoolSubPage被创建后还会将PoolSubPage存放在其中，数组中存放的位置与PoolSubPage底层内存段的offset偏移量一致。
 #####
 ```java
 /**
