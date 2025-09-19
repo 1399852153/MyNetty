@@ -602,18 +602,18 @@ public enum SizeClassEnum {
 * Large: [4 KiB, 8 KiB, 12 KiB, ..., 4072 KiB]
 * Huge: [4 MiB, 8 MiB, 12 MiB, …]
 #####
-而netty参考了jemalloc，同样将规格分为了对应的三类，即Small、Normal和Huge。默认情况下，Small与Normal的分界线不是4KB,而是8KB。  
+而netty参考了jemalloc，同样将规格分为了对应的三类，即Small、Normal和Huge。默认情况下，Small与Normal的分界线不是4KB,而是28KB。  
 * Huge类型分配：默认情况下大于4MB的PooledByteBuf分配，视为Huge规格。因为其占用空间过大，且实际使用场景很少，所以对于Huge类型的申请，netty不进行内存池化，而是每次都临时的申请新的内存来满足需求，以减少内存碎片。  
-* Normal类型分配：默认情况下[8KB，4MB]大小区间内的PooledByteBuf分配，视为Normal规格。netty参考linux内核的伙伴算法，通过管理以页(默认1页8KB)为最小单位的连续内存页段(run)的方式进行空闲内存的追踪与维护。
-* Small类型分配：默认情况下小于8KB的PooledByteBuf分配，被视为Small规格。netty参考linux内核的slab内存分配算法，通过管理一系列固定大小的内存对象槽集合的方式，管理待分配的池化内存。
+* Normal类型分配：默认情况下(28KB，4MB]大小区间内的PooledByteBuf分配，视为Normal规格。netty参考linux内核的伙伴算法，通过管理以页(默认1页8KB)为最小单位的连续内存页段(run)的方式进行空闲内存的追踪与维护。
+* Small类型分配：默认情况下小于等于28KB的PooledByteBuf分配，被视为Small规格。netty参考linux内核的slab内存分配算法，通过管理一系列固定大小的内存对象槽集合的方式，管理待分配的池化内存。
 #####
 为什么linux内核和netty都要基于实际申请的内存大小划分规格，并区别对待呢？我们留到下一篇博客介绍完small类型分配工作原理后统一进行分析。   
 下面我们基于MyNetty的SizeClasses实现源码来分析一下netty是如何进行规格划分的。  
 #####
 Netty的SizeClasses主要做了两件事，一个是计算出所申请内存的规格级别(Small、Normal还是Huge)，另一个则是规范化所申请的内存大小。  
 怎么理解规范化呢？无论是伙伴算法，还是slab算法，出于减少内存碎片的考虑，无法为任意字节大小的内存申请都预先池化恰好等于所申请大小的规格。  
-举个例子，假如用户要申请14kb大小的内存，又要申请11kb大小的内存，要想恰好满足用户的需求，则需要预留N个14kb的内存块和M个11kb的内存块。
-而用户实际会申请的内存大小的可能性是几乎不可枚举的，所以只能对其申请的内存大小进行规范化。比如申请11和14kb都统一将其规范化为满足其大小前提下最小的规格，比如16；而如果要申请的内存为28kb，则规范化为32等等。  
+举个例子，假如用户要申请34kb大小的内存，又要申请41kb大小的内存，要想恰好满足用户的需求，则需要预留N个34kb的内存块和M个37kb的内存块。
+而用户实际会申请的内存大小的可能性是几乎不可枚举的，所以只能对其申请的内存大小进行规范化。比如申请34和37kb都统一将其规范化为满足其大小前提下最小的规格，比如40；而如果要申请的内存为58kb，则规范化为64Kb等等。  
 #####
 netty和jemalloc一样，都以2的倍数为基础设计了一系列的规格，用以规范化内存申请大小。总的来说，规格越小，则规格的排布就越密集，比如16,32,48,64，每个间隔仅为16；而到了512时则是640，768，896，1024，每个间隔扩大到了128。  
 jemalloc的论文中提到之所以这样设计，是为了平衡内部碎片与外部碎片，当申请14kb而实际分配规范化后的16kb池化内存时，就有2kb的内部碎片无法使用；而对应规格的池化内存如果因为使用率较低的话，则会产生大量外部碎片。  
@@ -721,7 +721,7 @@ public class MySizeClasses {
         sizeTable[28] = new MySizeClassesMetadataItem(1024 * 5, SizeClassEnum.SMALL);
         sizeTable[29] = new MySizeClassesMetadataItem(1024 * 6, SizeClassEnum.SMALL);
         sizeTable[30] = new MySizeClassesMetadataItem(1024 * 7, SizeClassEnum.SMALL);
-        sizeTable[31] = new MySizeClassesMetadataItem(1024 * 8, SizeClassEnum.NORMAL);//组内固定间距1024(2^10) 大于等于PageSize的都是Normal级别
+        sizeTable[31] = new MySizeClassesMetadataItem(1024 * 8, SizeClassEnum.NORMAL);//组内固定间距1024(2^10) 大于等于PageSize的都是Normal级别(和Netty略有不同，netty中是28kb为分界线，目的是方便测试)
 
         sizeTable[32] = new MySizeClassesMetadataItem(1024 * 10, SizeClassEnum.NORMAL);
         sizeTable[33] = new MySizeClassesMetadataItem(1024 * 12, SizeClassEnum.NORMAL);

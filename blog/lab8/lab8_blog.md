@@ -50,7 +50,7 @@ slab算法是操作系统内核中专门用于小对象分配的算法。slab算
 ##### 2.2 Netty Small规格内存分配功能入口
 与Normal规格的内存分配的入口一样，Small规格的内存分配入口同样是PoolArena的allocate方法，唯一的区别在于所申请的实际大小。在被SizeClasses规范化计算后，如果被判定为是较小的Small规格的内存分配，则会执行tcacheAllocateSmall方法。  
 * tcacheAllocateSmall使用到了PoolArena中一个关键的成员属性poolSubPages数组。
-  PoolSubPages数组的大小与SizeClasses中规范化后的Small规格大小的数量相同(即16b，32b，... 6kb，7kb等规格大小)，每一个Small规格的大小都对应一个PoolSubPage链表，该链表可以将其看做是对应规格的PoolSubPage的对象池(PoolSubPage是Small规格分配的核心数据结构，在下一节再分析)。
+  PoolSubPages数组的大小与SizeClasses中规范化后的Small规格大小的数量相同(即16b，32b，... 24kb，28kb等规格大小)，每一个Small规格的大小都对应一个PoolSubPage链表，该链表可以将其看做是对应规格的PoolSubPage的对象池(PoolSubPage是Small规格分配的核心数据结构，在下一节再分析)。
 * 在进行分配时，基于规范化后的规格，去PoolSubPages中找到对应的链表，检查其中是否有可用的PoolSubPage。  
   数组中的PoolSubPage链表的头节点是默认存在的哨兵节点，如果发现head.next==head，则说明链表实际是空的，因此需要新创建一个空的PoolSubPage用于分配。  
   与内核中使用伙伴算法为slab算法分配连续内存段一样，Netty中也通过Normal规格分配来为Small规格的PoolSubPage分配其底层的连续内存段。  

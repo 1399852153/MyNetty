@@ -105,16 +105,16 @@ public class MySizeClasses {
         sizeTable[28] = new MySizeClassesMetadataItem(1024 * 5, SizeClassEnum.SMALL);
         sizeTable[29] = new MySizeClassesMetadataItem(1024 * 6, SizeClassEnum.SMALL);
         sizeTable[30] = new MySizeClassesMetadataItem(1024 * 7, SizeClassEnum.SMALL);
-        sizeTable[31] = new MySizeClassesMetadataItem(1024 * 8, SizeClassEnum.NORMAL);//组内固定间距1024(2^10) 大于等于PageSize的都是Normal级别
+        sizeTable[31] = new MySizeClassesMetadataItem(1024 * 8, SizeClassEnum.SMALL);//组内固定间距1024(2^10)
 
-        sizeTable[32] = new MySizeClassesMetadataItem(1024 * 10, SizeClassEnum.NORMAL);
-        sizeTable[33] = new MySizeClassesMetadataItem(1024 * 12, SizeClassEnum.NORMAL);
-        sizeTable[34] = new MySizeClassesMetadataItem(1024 * 14, SizeClassEnum.NORMAL);
-        sizeTable[35] = new MySizeClassesMetadataItem(1024 * 16, SizeClassEnum.NORMAL);//组内固定间距2048(2^11)
+        sizeTable[32] = new MySizeClassesMetadataItem(1024 * 10, SizeClassEnum.SMALL);
+        sizeTable[33] = new MySizeClassesMetadataItem(1024 * 12, SizeClassEnum.SMALL);
+        sizeTable[34] = new MySizeClassesMetadataItem(1024 * 14, SizeClassEnum.SMALL);
+        sizeTable[35] = new MySizeClassesMetadataItem(1024 * 16, SizeClassEnum.SMALL);//组内固定间距2048(2^11)
 
-        sizeTable[36] = new MySizeClassesMetadataItem(1024 * 20, SizeClassEnum.NORMAL);
-        sizeTable[37] = new MySizeClassesMetadataItem(1024 * 24, SizeClassEnum.NORMAL);
-        sizeTable[38] = new MySizeClassesMetadataItem(1024 * 28, SizeClassEnum.NORMAL);
+        sizeTable[36] = new MySizeClassesMetadataItem(1024 * 20, SizeClassEnum.SMALL);
+        sizeTable[37] = new MySizeClassesMetadataItem(1024 * 24, SizeClassEnum.SMALL);
+        sizeTable[38] = new MySizeClassesMetadataItem(1024 * 28, SizeClassEnum.SMALL);
         sizeTable[39] = new MySizeClassesMetadataItem(1024 * 32, SizeClassEnum.NORMAL);//组内固定间距4096(2^12)
 
         sizeTable[40] = new MySizeClassesMetadataItem(1024 * 40, SizeClassEnum.NORMAL);
