@@ -47,17 +47,19 @@ slab算法是操作系统内核中专门用于小对象分配的算法。slab算
 可以看到，slab算法相比伙伴算法，其时间复杂度更优，但空间复杂度较差。
 但slab算法空间复杂度较差的问题，在所缓存对象槽很小的场景下，问题并不严重。因此slab算法作为小对象的内存分配管理算法时，能够做到扬长避短，只需浪费少量的内存空间，便可非常高效的完成小对象内存的分配与回收。  
 
-##### 2.2 Netty Small规格内存分配功能入口
+### 2.2 Netty Small规格内存分配功能入口
 与Normal规格的内存分配的入口一样，Small规格的内存分配入口同样是PoolArena的allocate方法，唯一的区别在于所申请的实际大小。在被SizeClasses规范化计算后，如果被判定为是较小的Small规格的内存分配，则会执行tcacheAllocateSmall方法。  
 * tcacheAllocateSmall使用到了PoolArena中一个关键的成员属性poolSubPages数组。
-  PoolSubPages数组的大小与SizeClasses中规范化后的Small规格大小的数量相同(即16b，32b，... 24kb，28kb等规格大小)，每一个Small规格的大小都对应一个PoolSubPage链表，该链表可以将其看做是对应规格的PoolSubPage的对象池(PoolSubPage是Small规格分配的核心数据结构，在下一节再分析)。
+  PoolSubPages数组的大小与SizeClasses中规范化后的Small规格大小的数量相同(默认存在16b，32b，... 24kb，28kb等规格大小，共39项)，每一个Small规格的大小都对应一个PoolSubPage链表，该链表可以将其看做是对应规格的PoolSubPage的对象池(PoolSubPage是Small规格分配的核心数据结构，在下一节再分析)。
 * 在进行分配时，基于规范化后的规格，去PoolSubPages中找到对应的链表，检查其中是否有可用的PoolSubPage。  
   数组中的PoolSubPage链表的头节点是默认存在的哨兵节点，如果发现head.next==head，则说明链表实际是空的，因此需要新创建一个空的PoolSubPage用于分配。  
   与内核中使用伙伴算法为slab算法分配连续内存段一样，Netty中也通过Normal规格分配来为Small规格的PoolSubPage分配其底层的连续内存段。  
   而如果PoolSubPage链表不为空，则直接从中取出逻辑头结点的PoolSubPage(head.next)进行Small规格的分配。
 * 用于分配的PoolSubPage在被创建出来后，便会被挂载到对应规格的PoolSubPage链表中，当PoolSubPage已满或者因为内存释放而完全空闲时，会从PoolSubPage链表中被摘除。  
   特别的，当PoolSubPage链表中存在新节点后，后续将至少保证链表中至少存在一个可用的PoolSubPage节点，即使该节点是完全空闲状态也不会被回收掉。具体的细节会在PoolSubPage的分析环节中结合源码展开讲解。
-#####
+##### PoolSubPage数组结构图
+![img_1.png](img_1.png)
+##### 
 ```java
 public abstract class MyPoolArena<T> {
 	// ...... 已省略无关逻辑
@@ -184,13 +186,24 @@ public abstract class MyPoolArena<T> {
     }
 }
 ```
+##### PoolChunk实现Small规格分配
+前面提到，在PoolArena中的PoolSubPages数组中尝试寻找对应规格的可用PoolSubPage时，如果发现当前并没有可用的PoolSubPage节点，则需要新创建一个PoolSubPage节点。  
+而新的PoolSubPage节点底层的内存空间，同样需要由PoolChunk中维护的连续内存段来承载，因此其绝大多数的逻辑都与Normal规格的分配类似，但一些关键的不同点需要着重介绍。  
+* PoolChunk处理PoolSubPage分配的入口同样是allocate方法，在allocateSubpage方法的实际分配操作前，会PoolSubPage头结点中的lock方法将对应规格的链表进行加锁，避免并发调整相关的元数据结构。  
+* PoolSubPage既然是使用连续内存段来承载内存空间，那么其大小同样是以Page页为单位，是页大小的整数倍。那么分配时，具体应该分配多大的内存段呢?  
+  jemalloc的论文中提到，内存管理中最重要的一点就是尽量减少内存碎片。因此，Netty中为PoolSubPage分配的连续内存段大小，取决于页大小与PoolSubPage对应small规格大小的最小公倍数(calculateRunSize方法)。    
+  一般情况下，small规格的申请会比较多，对应规格的PoolSubPage会被完全用完。那么，在PoolSubPage被装满时其底层数组能够被100%的使用，空间利用率更高，内部碎片更少。
+* 在计算出所需的连续内存段大小后，便与Normal规格内存分配一样，尝试从当前PoolChunk中切割出一块符合要求的连续内存段(如果无法分配，则返回-1分配失败，重新找过一个PoolChunk)。  
+  切割出的连续内存段与新创建的PoolSubPage对象进行绑定，在PoolSubPage的构造方法中，会将自己挂载到到对应规格的双向链表中。  
+  随后，从这个新的PoolSubPage中通过allocate方法分配一个handle以满足此次Small规格的内存分配。  
 #####
 ```java
 /**
  * 内存分配chunk
  * */
 public class MyPoolChunk<T> {
-
+    // 。。。 已省略无关逻辑
+    
     /**
      * manage all subpages in this chunk
      */
