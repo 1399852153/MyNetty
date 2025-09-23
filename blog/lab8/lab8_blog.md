@@ -339,7 +339,7 @@ public class MyPoolChunk<T> {
   特别的，head节点独有的构造方法中为当前节点创建了一个用于防止并发修改链表结构的互斥锁。
 * 在2.1中提到，slab算法中会将一个连续内存段切割成N个大小相等的对象槽，并通过为每一个对象槽设置一个标识位来追踪其使用状态。Netty使用PoolSubPage来实现slab算法，那么很自然的能想到PoolSubPage中会有一个位图结构(bitmap)来追踪每个对象槽的状态。  
   但PoolSubPage中的位图并不是一个boolean数组，而是一个long数组，long是64位的，逻辑上一个long类型的数字可以等价于64个boolean位。  
-  使用long而不是boolean来实现位图的一个优势是可以充分的利用计算机底层的硬件能力，在64位的机器中，一次cpu的位计算就可以计算出当前long类型中是否存在可用的对象槽(每一个bit位中0标识为空闲，1标识为已分配，全部不可用则long的所有位为全1)。  
+  使用long而不是boolean来实现位图的一个优势是可以充分的利用计算机底层的硬件能力，在64位的机器中，一次cpu的位计算就可以计算出当前long类型中是否存在可用的对象槽(每一个bit位中0标识为空闲，1标识为已分配，全部不可用则long的所有bit位全为1)。  
   在查找可用插槽时，在PoolSubPage中大多数对象槽均被分配时，比起挨个遍历每一个bit位，使用long加位运算可以非常快的排除掉不可用的插槽集合。即使这样会让代码变得略显复杂，但换来的却是性能上的显著提升。
 * 在普通PoolSubPage中，对象被创建时，便会在构造方法中通过addToPool方法将当前节点作为head哨兵节点的直接后继插入链表。  
   在allocate方法中，如果当前PoolSubPage的最后一个空闲对象槽被分配掉之后，就无法再继续分配了，会将自己从当前双向链表中摘除掉(numAvail为0)。  
@@ -347,8 +347,7 @@ public class MyPoolChunk<T> {
   而如果当前free方法释放完成后，整个PoolSubPage完全空闲，则会尝试将整个PoolSubPage回收掉(从链表摘除，回收资源触发gc)，但会保证整个链表中至少有一个可用的PoolSubPage，避免在临界点上反复的创建/销毁。
 * 在allocate方法寻找可用的插槽时，会优先返回最近一次free方法释放的那个插槽(nextAvail属性)。因为当前申请与上一次分配的很可能是同一个线程，之前释放的内存块很可能还在CPU的高速缓存中，复用这个内存块用于当前分配能提高CPU缓存的局部性。  
   而当allocate分配nextAvail为null时(第一次分配，或者上一次分配已经使用了)，则会通过findNextAvail方法从头开始遍历整个位图，以期找到可用的插槽。  
-  正常来说一个long代表64个bit位，因此如果其存在为0的位则认为存在空闲插槽。但一个PoolSubPage所管理的对象槽并不总是64的整数倍，因此如果是末尾的long中存在为0的位，并不真的代表其为空闲(可能末尾的0是非法的位数)。  
-  因此，还需要完整的遍历整个long，只有不越界的0位才是实际能用的空闲插槽。
+  正常来说一个long代表64个bit位，因此如果其存在为0的位则认为存在空闲插槽。但一个PoolSubPage所管理的对象槽数量并不总是64的整数倍，因此如果是末尾的long中存在为0的位，并不真的代表其为空闲(可能末尾的0是非法的位数)。因此，还需要完整的遍历整个long，只有不越界的0位才是实际能用的空闲插槽。
 * PoolSubPage在初始化时，便记录了当前底层的连续内存段在PoolChunk中的偏移量、大小等，因此在Small类型的分配中，同样将自己的底层内存作为handle返回，用以标识和关联当前对象槽。  
   其中lab7中提到的isSubPage均为1，并且bitmapIdx部分就是所分配对象槽在整个PoolSubPage中位图的索引值。这样，在释放内存时，便可以快速的定位到对应的对象槽，将其标识还原。
 ##### MyNetty PoolSubPage实现源码
@@ -655,5 +654,13 @@ public class MyPoolSubPage<T> {
 ```
 
 ### 2.3 Netty Small规格内存释放原理解析
+和Normal规格内存释放一样，Small规格的内存释放核心逻辑入口同样是PoolChunk类的free方法。在free方法中，基于参数handle判断所要释放的内存是否是subPage(isSubPage)，如果是则说明是Small规格的内存释放。  
+* 首先基于其释放的内存大小，从PoolArena的PoolSubPages数组中找到对应规格的PoolSubPage链表头节点，通过头节点中的互斥锁来防止并发的修改。  
+  加锁可以保证当前规格的small内存的释放时修改元数据的安全性，同时同一个PoolArena中不同的small规格分配/释放互不影响，可以并发处理。    
+  解析handle，从handle中提取出所对应的PoolSubPage在当前PoolChunk中的offset偏移量，通过subpages索引直接找到对应的PoolSubPage对象。  
+* PoolSubPage的free方法进行内存的释放，释放时会将bitmap中对应bit位由1(已使用)重置为0(空闲)。  
+  同时还会判断在本次释放后当前PoolSubPage是否完全空闲。如果完全空闲，且当前PoolSubPage节点并不是当前链表中唯一的空闲节点，则会将自己从链表中摘除。  
+* 如果PoolSubPage的free方法返回false，则说明当前节点已完全空闲，且不再需要被使用，则会将当前PoolSubPage对象给回收掉。  
+  释放时首先将PoolChunk中的subpage数组中的索引删除，然后和Normal规格内存释放一样，释放出的内存段将回到PoolChunk中并尝试合并为更大的连续内存段，以供分配。
 
 ## 总结
