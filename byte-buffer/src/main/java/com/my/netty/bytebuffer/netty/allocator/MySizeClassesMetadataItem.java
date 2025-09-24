@@ -7,6 +7,7 @@ public class MySizeClassesMetadataItem {
 
     private int size;
     private SizeClassEnum sizeClassEnum;
+    private int tableIndex;
 
     public MySizeClassesMetadataItem(int size, SizeClassEnum sizeClassEnum) {
         this.size = size;
@@ -21,11 +22,20 @@ public class MySizeClassesMetadataItem {
         return sizeClassEnum;
     }
 
+    public int getTableIndex() {
+        return tableIndex;
+    }
+
+    public void setTableIndex(int tableIndex) {
+        this.tableIndex = tableIndex;
+    }
+
     @Override
     public String toString() {
         return "MySizeClassesMetadataItem{" +
             "size=" + size +
             ", sizeClassEnum=" + sizeClassEnum +
+            ", tableIndex=" + tableIndex +
             '}';
     }
 }

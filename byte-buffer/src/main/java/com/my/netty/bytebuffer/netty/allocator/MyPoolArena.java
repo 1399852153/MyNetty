@@ -22,6 +22,8 @@ public abstract class MyPoolArena<T> {
     private final MyPoolChunkList<T> q075;
     private final MyPoolChunkList<T> q100;
 
+    private final MyPoolSubPage<T>[] myPoolSubPages;
+
     private final ReentrantLock lock = new ReentrantLock();
 
     public MyPoolArena(MyPooledByteBufAllocator parent) {
@@ -45,6 +47,21 @@ public abstract class MyPoolArena<T> {
         this.q025.setPrevList(q000);
         this.q000.setPrevList(null);
         this.qInit.setPrevList(qInit);
+
+        // 初始化用于small类型分配的SubPage双向链表head节点集合，每一个subPage的规格都会有一个对应的双向链表
+        // 参考linux内核的slab分配算法，对于小对象来说，区别于伙伴算法的拆分/合并，而是直接将申请的内存大小规范化后，将相同规格的内存块同一管理起来
+        // 当需要分配某个规格的小内存时，直接去对应的SubPage链表中找到一个可用的分片，直接进行分配
+        // 不需要和normal那样在分配时拆分，释放时合并；虽然会浪费一些内存空间(内部碎片)，但因为只适用于small的小内存分配所以浪费的量很少
+        // 同时small类型的分配的场景又是远高于normal的，以空间换时间(大幅提高分配速度，但只浪费了少量的内存)
+        int nSubPages = this.mySizeClasses.getNSubPage();
+        this.myPoolSubPages = new MyPoolSubPage[nSubPages];
+        for(int i=0; i<nSubPages; i++){
+            MyPoolSubPage<T> myPoolSubPageItem = new MyPoolSubPage<>(i);
+            // 初始化时，令每一个PoolSubPage的头结点单独构成一个双向链表(头尾指针都指向自己)
+            myPoolSubPageItem.prev = myPoolSubPageItem;
+            myPoolSubPageItem.next = myPoolSubPageItem;
+            this.myPoolSubPages[i] = myPoolSubPageItem;
+        }
 
         // 简单起见，PoolChunkListMetric暂不实现
     }
@@ -142,26 +159,61 @@ public abstract class MyPoolArena<T> {
     }
 
     private void allocate(MyPooledByteBuf<T> buf, int reqCapacity) {
-        // todo 因为暂时只实现了Normal规格的分配，为了保证正常工作，把SMALL规格的申请强行设置为Normal规格
-        if(reqCapacity < 8192){
-            reqCapacity = 8192;
-        }
 
         MySizeClassesMetadataItem sizeClassesMetadataItem = mySizeClasses.size2SizeIdx(reqCapacity);
 
         switch (sizeClassesMetadataItem.getSizeClassEnum()){
             case SMALL:
-
-                // 暂不支持
-                throw new RuntimeException("not support small size allocate! reqCapacity=" + reqCapacity);
-//                 tcacheAllocateSmall(buf, reqCapacity, sizeIdx);
+                // small规格内存分配
+                tcacheAllocateSmall(buf, reqCapacity, sizeClassesMetadataItem);
+                return;
             case NORMAL:
+                // normal规格内存分配
                 tcacheAllocateNormal(buf, reqCapacity, sizeClassesMetadataItem);
                 return;
             case HUGE:
                 // 超过了PoolChunk大小的内存分配就是Huge级别的申请，每次分配使用单独的非池化的新PoolChunk来承载
                 allocateHuge(buf, reqCapacity);
         }
+    }
+
+    private void tcacheAllocateSmall(MyPooledByteBuf<T> buf, final int reqCapacity, final MySizeClassesMetadataItem sizeClassesMetadataItem) {
+        // todo 基于线程本地缓存获取，暂不实现
+        // if (cache.allocateSmall(this, buf, reqCapacity, sizeIdx)) {
+//            // was able to allocate out of the cache so move on
+//            return;
+//        }
+
+        MyPoolSubPage<T> head = this.myPoolSubPages[sizeClassesMetadataItem.getTableIndex()];
+        boolean needsNormalAllocation;
+        head.lock();
+        try {
+            final MyPoolSubPage<T> s = head.next;
+            // 如果head.next = head自己，说明当前规格下可供分配的PoolSubPage内存段不存在，需要新分配一个内存段(needsNormalAllocation=true)
+            needsNormalAllocation = (s == head);
+            if (!needsNormalAllocation) {
+                // 走到这里，head节点下挂载了至少一个可供当前规格分配的使用的PoolSubPage，直接调用其allocate方法进行分配
+                long handle = s.allocate();
+                // 分配好，将对应的handle与buf进行绑定
+                s.chunk.initBufWithSubpage(buf, null, handle, reqCapacity);
+            }
+        } finally {
+            head.unlock();
+        }
+
+        // 需要申请一个新的run来进行small类型的subPage分配
+        if (needsNormalAllocation) {
+            lock();
+            try {
+                allocateNormal(buf, reqCapacity, sizeClassesMetadataItem);
+            } finally {
+                unlock();
+            }
+        }
+    }
+
+    MyPoolSubPage<T> findSubpagePoolHead(int sizeIdx) {
+        return myPoolSubPages[sizeIdx];
     }
 
     private void tcacheAllocateNormal(MyPooledByteBuf<T> buf, final int reqCapacity, final MySizeClassesMetadataItem sizeClassesMetadataItem) {
@@ -175,12 +227,6 @@ public abstract class MyPoolArena<T> {
             unlock();
         }
     }
-
-    private void allocateHuge(MyPooledByteBuf<T> buf, int reqCapacity) {
-        MyPoolChunk<T> chunk = newUnpooledChunk(reqCapacity);
-        buf.initUnPooled(chunk, reqCapacity);
-    }
-
 
     private void allocateNormal(MyPooledByteBuf<T> buf, int reqCapacity, MySizeClassesMetadataItem sizeIdx) {
         // 优先从050的PoolChunkList开始尝试分配，尽可能的复用已经使用较充分的PoolChunk。如果分配失败，就尝试另一个区间内的PoolChunk
@@ -216,6 +262,10 @@ public abstract class MyPoolArena<T> {
         qInit.add(c);
     }
 
+    private void allocateHuge(MyPooledByteBuf<T> buf, int reqCapacity) {
+        MyPoolChunk<T> chunk = newUnpooledChunk(reqCapacity);
+        buf.initUnPooled(chunk, reqCapacity);
+    }
 
     public MySizeClasses getMySizeClasses() {
         return mySizeClasses;

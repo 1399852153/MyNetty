@@ -89,6 +89,11 @@ public class MyPoolChunk<T> {
     private final LongPriorityQueue[] runsAvail;
 
     /**
+     * manage all subpages in this chunk
+     */
+    private final MyPoolSubPage<T>[] subpages;
+
+    /**
      * store the first page and last page of each avail run
      */
     private final LongLongHashMap runsAvailMap;
@@ -127,8 +132,9 @@ public class MyPoolChunk<T> {
 
         this.runsAvailMap = new LongLongHashMap(-1);
 
-        // todo PoolSubpage用于small级别的分配，等后面再实现
-//        subpages = new PoolSubpage[chunkSize >> pageShifts];
+        // PoolSubpage用于small级别的分配
+        int totalPages = chunkSize >> pageShifts;
+        this.subpages = new MyPoolSubPage[totalPages];
 
         // 一个chunk一共有多少个Page单元
         int pages = chunkSize >> pageShifts;
@@ -164,7 +170,7 @@ public class MyPoolChunk<T> {
         runsAvailMap = null;
         runsAvail = null;
         runsAvailLock = null;
-//        subpages = null;
+        subpages = null;
         chunkSize = size;
     }
 
@@ -204,14 +210,19 @@ public class MyPoolChunk<T> {
     boolean allocate(MyPooledByteBuf<T> buf, int reqCapacity, MySizeClassesMetadataItem mySizeClassesMetadataItem) {
         long handle;
         if (mySizeClassesMetadataItem.getSizeClassEnum() == SizeClassEnum.SMALL) {
-            // todo small分配待实现
-            handle = -1;
+            // small规格分配
+            handle = allocateSubpage(mySizeClassesMetadataItem);
+            if (handle < 0) {
+                // 如果handle为-1，说明当前的Chunk分配失败，返回false
+                return false;
+            }
         } else {
             // 除了Small就只可能是Normal，huge的不去池化，进不来
             // runSize must be multiple of pageSize(normal类型分配的连续内存段的大小必须是pageSize的整数倍)
             int runSize = mySizeClassesMetadataItem.getSize();
             handle = allocateRun(runSize);
             if (handle < 0) {
+                // 如果handle为-1，说明当前的Chunk分配失败，返回false
                 return false;
             }
         }
@@ -222,13 +233,23 @@ public class MyPoolChunk<T> {
     }
 
     void initBuf(MyPooledByteBuf<T> buf, ByteBuffer nioBuffer, long handle, int reqCapacity) {
-        // if (isSubpage(handle)) {
-            // initBufWithSubpage(buf, nioBuffer, handle, reqCapacity, threadCache);
-        // } else {
+        if (isSubpage(handle)) {
+            initBufWithSubpage(buf, nioBuffer, handle, reqCapacity);
+        } else {
             int maxLength = runSize(pageShifts, handle);
             buf.init(this, nioBuffer, handle, runOffset(handle) << pageShifts,
                 reqCapacity, maxLength);
-        // }
+        }
+    }
+
+    void initBufWithSubpage(MyPooledByteBuf<T> buf, ByteBuffer nioBuffer, long handle, int reqCapacity) {
+        int runOffset = runOffset(handle);
+        int bitmapIdx = bitmapIdx(handle);
+
+        MyPoolSubPage<T> s = subpages[runOffset];
+
+        int offset = (runOffset << pageShifts) + bitmapIdx * s.elemSize;
+        buf.init(this, nioBuffer, handle, offset, reqCapacity, s.elemSize);
     }
 
     public void incrementPinnedMemory(int delta) {
@@ -249,6 +270,67 @@ public class MyPoolChunk<T> {
 
     public boolean isUnpooled() {
         return unpooled;
+    }
+
+    /**
+     * Create / initialize a new PoolSubpage of normCapacity. Any PoolSubpage created / initialized here is added to
+     * subpage pool in the PoolArena that owns this PoolChunk
+     */
+    private long allocateSubpage(MySizeClassesMetadataItem sizeClassesMetadataItem) {
+        MyPoolSubPage<T> head = arena.findSubpagePoolHead(sizeClassesMetadataItem.getTableIndex());
+        // 对头结点上锁，保证当前规格的small内存分配不会出现并发(锁的粒度正好)
+        head.lock();
+        try {
+            // 计算出为当前规格small类型内存分配所需要申请的PoolSubPage大小
+            int runSize = calculateRunSize(sizeClassesMetadataItem);
+            // 根据计算出的内存段规格，尝试从该PoolChunk划分出一块run内存段出来以供分配
+            long runHandle = allocateRun(runSize);
+            if (runHandle < 0) {
+                // 内存不足，分配不出来对应大小的规格，返回-1代表分配失败
+                return -1;
+            }
+
+            int runOffset = runOffset(runHandle);
+            int elemSize = sizeClassesMetadataItem.getSize();
+
+            MyPoolSubPage<T> subpage = new MyPoolSubPage<>(head, this, pageShifts, runOffset,
+                runSize(pageShifts, runHandle), elemSize);
+
+            // 记录一下用于分配PoolSubPage内存段的偏移量，等释放内存的时候能根据handle中记录的offset快速的找到所对应的PoolSubPage
+            subpages[runOffset] = subpage;
+            // 分配一个small类型的内存段出去(以handle的形式)
+            return subpage.allocate();
+        } finally {
+            head.unlock();
+        }
+    }
+
+    /**
+     * 计算出为当前规格small类型内存分配所需要申请的PoolSubPage大小
+     * */
+    private int calculateRunSize(MySizeClassesMetadataItem sizeClassesMetadataItem) {
+        // 一页是8K，最小的规格是16b，所以最大的元素个数maxElements为8K/16b
+        int maxElements = 1 << (pageShifts - MySizeClasses.LOG2_QUANTUM);
+        int runSize = 0;
+        int nElements;
+
+        final int elemSize = sizeClassesMetadataItem.getSize();
+
+        // 获得pageSize和elemSize的最小公倍数
+        // 首先，PoolChunk中的run内存段是以Page为单位进行分配的，所以分配出去的PoolSubPage大小一定要是Page的整数倍
+        // 而pageSize和elemSize的最小公倍数，在其期望上可以减少内部内存碎片。极端情况下可能不是最优策略，但是总体上来说是最节约空间的
+        // 举个例子如果整个运行周期就只申请了一次1280字节的规格，那么最小公倍数的策略(8192 * 5 = 40960)就不如直接分配一个1页大小的节约空间，但这毕竟是极端情况
+        do {
+            runSize += pageSize;
+            nElements = runSize / elemSize;
+        } while (nElements < maxElements && runSize != nElements * elemSize);
+
+        while (nElements > maxElements) {
+            runSize -= pageSize;
+            nElements = runSize / elemSize;
+        }
+
+        return runSize;
     }
 
     /**
@@ -406,7 +488,32 @@ public class MyPoolChunk<T> {
         // 获得所释放内存段的大小
         int runSize = runSize(pageShifts, handle);
 
-        // todo subPage free 下个版本再实现
+        if (isSubpage(handle)) {
+            // handle中标识，发现是small类型的内存需要释放(subPage free)
+            MySizeClassesMetadataItem sizeClassesMetadataItem = arena.getMySizeClasses().size2SizeIdx(normCapacity);
+            // 拿到头结点
+            MyPoolSubPage<T> head = arena.findSubpagePoolHead(sizeClassesMetadataItem.getTableIndex());
+
+            int sIdx = runOffset(handle);
+            // 基于handle中的偏移量快速定位到所在的PoolSubPage
+            MyPoolSubPage<T> subpage = subpages[sIdx];
+
+            // Obtain the head of the PoolSubPage pool that is owned by the PoolArena and synchronize on it.
+            // This is need as we may add it back and so alter the linked-list structure.
+            head.lock();
+            try {
+                boolean subPageInUse = subpage.free(head, bitmapIdx(handle));
+                if (subPageInUse) {
+                    // the subpage is still used, do not free it
+                    // 当前PoolSubPage内存段还需要继续被使用，直接返回，不需要走后续的内存段回收逻辑
+                    return;
+                }
+                // 将对应的PoolSubPage与subpages数组断开关联，让其通过gc回收掉
+                subpages[sIdx] = null;
+            } finally {
+                head.unlock();
+            }
+        }
 
         // 开始释放内存，加锁防并发
         runsAvailLock.lock();
@@ -416,8 +523,8 @@ public class MyPoolChunk<T> {
 
             // 整个内存段设置为未使用(可能合并了，也可能就只是回收了当前内存段)
             finalRun &= ~(1L << IS_USED_SHIFT);
-//            // if it is a subpage, set it to run
-//            finalRun &= ~(1L << IS_SUBPAGE_SHIFT);
+            // if it is a subpage, set it to run(如果该内存段之前用于PoolSubPage，现在重置该内存段的isSubPage标识位，令其可以被用于normal类型分配)
+            finalRun &= ~(1L << IS_SUBPAGE_SHIFT);
 
             // 将空闲的内存段插入到PoolChunk中
             insertAvailRun(runOffset(finalRun), runPages(finalRun), finalRun);
@@ -505,5 +612,9 @@ public class MyPoolChunk<T> {
 
     private long getAvailRunByOffset(int runOffset) {
         return runsAvailMap.get(runOffset);
+    }
+
+    static int bitmapIdx(long handle) {
+        return (int) handle;
     }
 }
