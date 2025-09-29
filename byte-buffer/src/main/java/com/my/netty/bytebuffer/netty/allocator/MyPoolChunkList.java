@@ -109,7 +109,7 @@ public class MyPoolChunkList<T> {
      * @return true 分配成功
      *         false 分配失败
      * */
-    boolean allocate(MyPooledByteBuf<T> buf, int reqCapacity, MySizeClassesMetadataItem sizeClassesMetadataItem) {
+    boolean allocate(MyPooledByteBuf<T> buf, int reqCapacity, MySizeClassesMetadataItem sizeClassesMetadataItem, MyPoolThreadCache threadCache) {
         if (sizeClassesMetadataItem.getSize() > maxCapacity) {
             // 所申请的内存超过了当前ChunkList中Chunk单元的最大空间，无法分配返回false
             return false;
@@ -119,7 +119,7 @@ public class MyPoolChunkList<T> {
             // todo 支持threadCache缓存
 
             // 从head节点开始遍历当前Chunk链表，尝试进行分配
-            if (currentChunk.allocate(buf, reqCapacity, sizeClassesMetadataItem)) {
+            if (currentChunk.allocate(buf, reqCapacity, sizeClassesMetadataItem, threadCache)) {
                 // 当前迭代的Chunk分配内存成功，空闲空间减少
                 // 判断一下分配后的空闲空间是否低于当前最小阈值
                 if (currentChunk.freeBytes <= freeMinThreshold) {

@@ -294,7 +294,10 @@ public class MySizeClasses {
         return chunkSize;
     }
 
-
+    public int getSmallAndNormalTotalSize() {
+        // 排除掉Huge那一项
+        return sizeTable.length - 1;
+    }
 
     /**
      * 和size2SizeIdx逻辑几乎一样，也是基于有规律的pageIdx2sizeTab表来快速定位对应规格

@@ -3,6 +3,7 @@ package com.my.netty.bytebuffer.netty;
 
 import com.my.netty.bytebuffer.netty.allocator.MyByteBufAllocator;
 import com.my.netty.bytebuffer.netty.allocator.MyPoolChunk;
+import com.my.netty.bytebuffer.netty.allocator.MyPoolThreadCache;
 import com.my.netty.bytebuffer.netty.objectpool.MyObjectPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +30,9 @@ public abstract class MyPooledByteBuf<T> extends MyAbstractReferenceCountedByteB
     private final MyObjectPool.Handle<MyPooledByteBuf<T>> recyclerHandle;
     ByteBuffer tmpNioBuf;
 
+    private MyPoolThreadCache threadCache;
+
+
     @SuppressWarnings("unchecked")
     protected MyPooledByteBuf(MyObjectPool.Handle<? extends MyPooledByteBuf<T>> recyclerHandle, int maxCapacity) {
         super(maxCapacity);
@@ -36,25 +40,26 @@ public abstract class MyPooledByteBuf<T> extends MyAbstractReferenceCountedByteB
     }
 
     public void init(MyPoolChunk<T> chunk, ByteBuffer nioBuffer,
-                     long handle, int offset, int length, int maxLength) {
+                     long handle, int offset, int length, int maxLength, MyPoolThreadCache threadCache) {
         logger.info("init MyPooledByteBuf, use chunk={},offset={}",chunk,offset);
 
-        init0(chunk, nioBuffer, handle, offset, length, maxLength);
+        init0(chunk, nioBuffer, handle, offset, length, maxLength, threadCache);
     }
 
     public void initUnPooled(MyPoolChunk<T> chunk, int length) {
         // UnPooled，没有对应的handle，maxlength等于length
-        init0(chunk, null, 0, 0, length, length);
+        init0(chunk, null, 0, 0, length, length, null);
     }
 
     private void init0(MyPoolChunk<T> chunk, ByteBuffer nioBuffer,
-                       long handle, int offset, int length, int maxLength) {
+                       long handle, int offset, int length, int maxLength, MyPoolThreadCache threadCache) {
 
         chunk.incrementPinnedMemory(maxLength);
         this.chunk = chunk;
         memory = chunk.getMemory();
         tmpNioBuf = nioBuffer;
         allocator = chunk.getArena().getParent();
+        this.threadCache = threadCache;
         this.handle = handle;
         this.offset = offset;
         this.length = length;
@@ -85,7 +90,7 @@ public abstract class MyPooledByteBuf<T> extends MyAbstractReferenceCountedByteB
             this.handle = -1;
             memory = null;
             chunk.decrementPinnedMemory(maxLength);
-            chunk.getArena().free(chunk, handle, maxLength);
+            chunk.getArena().free(chunk, handle, maxLength, threadCache);
             tmpNioBuf = null;
             chunk = null;
             recycle();
@@ -166,6 +171,10 @@ public abstract class MyPooledByteBuf<T> extends MyAbstractReferenceCountedByteB
 
     public int getOffset() {
         return offset;
+    }
+
+    public MyPoolThreadCache getThreadCache() {
+        return threadCache;
     }
 
     public int getMaxLength() {

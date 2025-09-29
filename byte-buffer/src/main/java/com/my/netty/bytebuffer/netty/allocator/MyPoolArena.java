@@ -5,6 +5,7 @@ import com.my.netty.bytebuffer.netty.MyPooledByteBuf;
 import com.my.netty.bytebuffer.netty.MyPooledHeapByteBuf;
 
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -26,11 +27,17 @@ public abstract class MyPoolArena<T> {
 
     private final ReentrantLock lock = new ReentrantLock();
 
+    final int numSmallSubpagePools;
+
+    // Number of thread caches backed by this arena.
+    final AtomicInteger numThreadCaches = new AtomicInteger();
+
     public MyPoolArena(MyPooledByteBufAllocator parent) {
         this.parent = parent;
         this.mySizeClasses = new MySizeClasses();
 
         int chunkSize = this.mySizeClasses.getChunkSize();
+        this.numSmallSubpagePools = this.mySizeClasses.getNSubPage();
 
         // 从小到大，使用率区间相近的PoolChunkList进行关联，组成双向链表(使用率区间有重合，论文中提到是设置磁滞效应，避免使用率小幅波动时反复移动位置，以提高性能)
         // qInit <=> q000[1%-50%) <=> q025[25%-75%) <=> q050[50%-100%) <=> q075[75%-100%) <=> q100(100%)
@@ -69,11 +76,11 @@ public abstract class MyPoolArena<T> {
     /**
      * 从当前PoolArena中申请分配内存，并将其包装成一个PooledByteBuf返回
      * */
-    MyPooledByteBuf<T> allocate(int reqCapacity, int maxCapacity) {
+    MyPooledByteBuf<T> allocate(MyPoolThreadCache cache, int reqCapacity, int maxCapacity) {
         // 从对象池中获取缓存的PooledByteBuf对象
         MyPooledByteBuf<T> buf = newByteBuf(maxCapacity);
         // 为其分配底层数组对应的内存
-        allocate(buf, reqCapacity);
+        allocate(cache, buf, reqCapacity);
         return buf;
     }
 
@@ -85,7 +92,7 @@ public abstract class MyPoolArena<T> {
         final T oldMemory;
         final int oldOffset;
         final int oldMaxLength;
-//        final PoolThreadCache oldCache;
+        final MyPoolThreadCache oldCache;
 
         // We synchronize on the ByteBuf itself to ensure there is no "concurrent" reallocations for the same buffer.
         // We do this to ensure the ByteBuf internal fields that are used to allocate / free are not accessed
@@ -103,15 +110,16 @@ public abstract class MyPoolArena<T> {
             }
 
             oldChunk = buf.getChunk();
-//            oldNioBuffer = buf.tmpNioBuf;
             oldHandle = buf.getHandle();
             oldMemory = buf.getMemory();
             oldOffset = buf.getOffset();
             oldMaxLength = buf.getMaxLength();
-//            oldCache = buf.cache;
+            oldCache = buf.getThreadCache();
+
+            MyPoolThreadCache cache = parent.getThreadLocalCache().get();
 
             // This does not touch buf's reader/writer indices
-            allocate(buf, newCapacity);
+            allocate(cache, buf, newCapacity);
         }
         int bytesToCopy;
         if (newCapacity > oldCapacity) {
@@ -121,18 +129,24 @@ public abstract class MyPoolArena<T> {
             bytesToCopy = newCapacity;
         }
         memoryCopy(oldMemory, oldOffset, buf, bytesToCopy);
-        free(oldChunk, oldHandle, oldMaxLength);
+        free(oldChunk, oldHandle, oldMaxLength, oldCache);
     }
 
     /**
      * 释放回收属于当前PoolArena特定Chunk中的某个内存段
      * */
-    public void free(MyPoolChunk<T> chunk, long handle, int normCapacity) {
+    public void free(MyPoolChunk<T> chunk, long handle, int normCapacity, MyPoolThreadCache cache) {
         if(chunk.unpooled){
             // huge类型使用的chunk是unPooled非池化的
             // 不需要去处理Chunk和ChunkList间的关系，也不用看释放后的占用率(因为huge类型的buf申请是完全独占整个chunk的)，被释放直接将chunk销毁即可
             destroyChunk(chunk);
         }else{
+            if (cache != null && cache.add(this, chunk, null, handle, normCapacity)) {
+                // 释放时，首先先尝试放到当前线程自己的ThreadCache里，方便后续同样规格的内存再申请时进行分配
+                return;
+            }
+
+            // 线程本地内存存放不了，则走正常的释放逻辑，将其释放回PoolChunk里
             freeChunk(chunk, handle, normCapacity);
         }
     }
@@ -158,18 +172,18 @@ public abstract class MyPoolArena<T> {
         return parent;
     }
 
-    private void allocate(MyPooledByteBuf<T> buf, int reqCapacity) {
+    private void allocate(MyPoolThreadCache cache, MyPooledByteBuf<T> buf, int reqCapacity) {
 
         MySizeClassesMetadataItem sizeClassesMetadataItem = mySizeClasses.size2SizeIdx(reqCapacity);
 
         switch (sizeClassesMetadataItem.getSizeClassEnum()){
             case SMALL:
                 // small规格内存分配
-                tcacheAllocateSmall(buf, reqCapacity, sizeClassesMetadataItem);
+                tcacheAllocateSmall(cache, buf, reqCapacity, sizeClassesMetadataItem);
                 return;
             case NORMAL:
                 // normal规格内存分配
-                tcacheAllocateNormal(buf, reqCapacity, sizeClassesMetadataItem);
+                tcacheAllocateNormal(cache, buf, reqCapacity, sizeClassesMetadataItem);
                 return;
             case HUGE:
                 // 超过了PoolChunk大小的内存分配就是Huge级别的申请，每次分配使用单独的非池化的新PoolChunk来承载
@@ -177,13 +191,14 @@ public abstract class MyPoolArena<T> {
         }
     }
 
-    private void tcacheAllocateSmall(MyPooledByteBuf<T> buf, final int reqCapacity, final MySizeClassesMetadataItem sizeClassesMetadataItem) {
-        // todo 基于线程本地缓存获取，暂不实现
-        // if (cache.allocateSmall(this, buf, reqCapacity, sizeIdx)) {
-//            // was able to allocate out of the cache so move on
-//            return;
-//        }
+    private void tcacheAllocateSmall(MyPoolThreadCache cache, MyPooledByteBuf<T> buf, final int reqCapacity, final MySizeClassesMetadataItem sizeClassesMetadataItem) {
+        // 优先从线程本地缓存进行分配，cpu高速缓存的局部性更好
+        if (cache.allocateSmall(this, buf, reqCapacity, sizeClassesMetadataItem)) {
+            // 线程本地缓存中有直接可供分配的内存块，分配成功直接返回
+            return;
+        }
 
+        // 线程本地缓存分配失败(可能是确实没有可供分配的内存块，也可能里面smallCacheSize=0，非目标类型的线程不走缓存逻辑)，从PoolArena里面去申请
         MyPoolSubPage<T> head = this.myPoolSubPages[sizeClassesMetadataItem.getTableIndex()];
         boolean needsNormalAllocation;
         head.lock();
@@ -195,7 +210,7 @@ public abstract class MyPoolArena<T> {
                 // 走到这里，head节点下挂载了至少一个可供当前规格分配的使用的PoolSubPage，直接调用其allocate方法进行分配
                 long handle = s.allocate();
                 // 分配好，将对应的handle与buf进行绑定
-                s.chunk.initBufWithSubpage(buf, null, handle, reqCapacity);
+                s.chunk.initBufWithSubpage(buf, null, handle, reqCapacity, cache);
             }
         } finally {
             head.unlock();
@@ -205,7 +220,7 @@ public abstract class MyPoolArena<T> {
         if (needsNormalAllocation) {
             lock();
             try {
-                allocateNormal(buf, reqCapacity, sizeClassesMetadataItem);
+                allocateNormal(cache, buf, reqCapacity, sizeClassesMetadataItem);
             } finally {
                 unlock();
             }
@@ -216,34 +231,38 @@ public abstract class MyPoolArena<T> {
         return myPoolSubPages[sizeIdx];
     }
 
-    private void tcacheAllocateNormal(MyPooledByteBuf<T> buf, final int reqCapacity, final MySizeClassesMetadataItem sizeClassesMetadataItem) {
-        // todo 基于线程本地缓存获取，暂不实现
+    private void tcacheAllocateNormal(MyPoolThreadCache cache, MyPooledByteBuf<T> buf, final int reqCapacity, final MySizeClassesMetadataItem sizeClassesMetadataItem) {
+        // 优先从线程本地缓存进行分配，cpu高速缓存的局部性更好
+        if (cache.allocateNormal(this, buf, reqCapacity, sizeClassesMetadataItem)) {
+            // was able to allocate out of the cache so move on
+            return;
+        }
 
         lock();
         try {
             // 加锁处理，防止并发修改元数据
-            allocateNormal(buf, reqCapacity, sizeClassesMetadataItem);
+            allocateNormal(cache, buf, reqCapacity, sizeClassesMetadataItem);
         } finally {
             unlock();
         }
     }
 
-    private void allocateNormal(MyPooledByteBuf<T> buf, int reqCapacity, MySizeClassesMetadataItem sizeIdx) {
+    private void allocateNormal(MyPoolThreadCache cache, MyPooledByteBuf<T> buf, int reqCapacity, MySizeClassesMetadataItem sizeIdx) {
         // 优先从050的PoolChunkList开始尝试分配，尽可能的复用已经使用较充分的PoolChunk。如果分配失败，就尝试另一个区间内的PoolChunk
         // 分配成功则直接return快速返回
-        if (q050.allocate(buf, reqCapacity, sizeIdx)){
+        if (q050.allocate(buf, reqCapacity, sizeIdx, cache)){
             return;
         }
-        if (q025.allocate(buf, reqCapacity, sizeIdx)){
+        if (q025.allocate(buf, reqCapacity, sizeIdx, cache)){
             return;
         }
-        if (q000.allocate(buf, reqCapacity, sizeIdx)){
+        if (q000.allocate(buf, reqCapacity, sizeIdx, cache)){
             return;
         }
-        if (qInit.allocate(buf, reqCapacity, sizeIdx)){
+        if (qInit.allocate(buf, reqCapacity, sizeIdx, cache)){
             return;
         }
-        if (q075.allocate(buf, reqCapacity, sizeIdx)){
+        if (q075.allocate(buf, reqCapacity, sizeIdx, cache)){
             return;
         }
 
@@ -257,7 +276,7 @@ public abstract class MyPoolArena<T> {
 
         // 创建一个新的PoolChunk，用来进行本次内存分配
         MyPoolChunk<T> c = newChunk(pageSize, nPSizes, pageShifts, chunkSize);
-        c.allocate(buf, reqCapacity, sizeIdx);
+        c.allocate(buf, reqCapacity, sizeIdx, cache);
         // 新创建的PoolChunk首先加入qInit(可能使用率较高，add方法里会去移动到合适的PoolChunkList中(nextList.add))
         qInit.add(c);
     }

@@ -207,7 +207,7 @@ public class MyPoolChunk<T> {
         return queueArray;
     }
 
-    boolean allocate(MyPooledByteBuf<T> buf, int reqCapacity, MySizeClassesMetadataItem mySizeClassesMetadataItem) {
+    boolean allocate(MyPooledByteBuf<T> buf, int reqCapacity, MySizeClassesMetadataItem mySizeClassesMetadataItem, MyPoolThreadCache threadCache) {
         long handle;
         if (mySizeClassesMetadataItem.getSizeClassEnum() == SizeClassEnum.SMALL) {
             // small规格分配
@@ -228,28 +228,28 @@ public class MyPoolChunk<T> {
         }
 
         // 分配成功，将这个空的buf对象进行初始化
-        initBuf(buf,null,handle,reqCapacity);
+        initBuf(buf,null,handle,reqCapacity,threadCache);
         return true;
     }
 
-    void initBuf(MyPooledByteBuf<T> buf, ByteBuffer nioBuffer, long handle, int reqCapacity) {
+    void initBuf(MyPooledByteBuf<T> buf, ByteBuffer nioBuffer, long handle, int reqCapacity, MyPoolThreadCache threadCache) {
         if (isSubpage(handle)) {
-            initBufWithSubpage(buf, nioBuffer, handle, reqCapacity);
+            initBufWithSubpage(buf, nioBuffer, handle, reqCapacity, threadCache);
         } else {
             int maxLength = runSize(pageShifts, handle);
             buf.init(this, nioBuffer, handle, runOffset(handle) << pageShifts,
-                reqCapacity, maxLength);
+                reqCapacity, maxLength, threadCache);
         }
     }
 
-    void initBufWithSubpage(MyPooledByteBuf<T> buf, ByteBuffer nioBuffer, long handle, int reqCapacity) {
+    void initBufWithSubpage(MyPooledByteBuf<T> buf, ByteBuffer nioBuffer, long handle, int reqCapacity, MyPoolThreadCache threadCache) {
         int runOffset = runOffset(handle);
         int bitmapIdx = bitmapIdx(handle);
 
         MyPoolSubPage<T> s = subpages[runOffset];
 
         int offset = (runOffset << pageShifts) + bitmapIdx * s.elemSize;
-        buf.init(this, nioBuffer, handle, offset, reqCapacity, s.elemSize);
+        buf.init(this, nioBuffer, handle, offset, reqCapacity, s.elemSize, threadCache);
     }
 
     public void incrementPinnedMemory(int delta) {

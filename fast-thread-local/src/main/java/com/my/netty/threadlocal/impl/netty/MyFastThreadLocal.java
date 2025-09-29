@@ -90,6 +90,20 @@ public class MyFastThreadLocal<V> implements ThreadLocalApi<V> {
         return initialize(threadLocalMap);
     }
 
+    @SuppressWarnings("unchecked")
+    public final V getIfExists() {
+        MyFastThreadLocalMap threadLocalMap = MyFastThreadLocalMap.getIfSet();
+        if (threadLocalMap != null) {
+            Object v = threadLocalMap.indexedVariable(index);
+            if (v != MyFastThreadLocalMap.UNSET) {
+                return (V) v;
+            }
+        }
+
+        // 相比正常的get，在不存在时就直接返回null即可
+        return null;
+    }
+
     @Override
     public final void set(V value) {
         if (value != MyFastThreadLocalMap.UNSET) {

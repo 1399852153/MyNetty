@@ -7,9 +7,15 @@ public class MyPooledByteBufAllocator extends MyAbstractByteBufAllocator{
 
     private final MyPoolArena<byte[]>[] heapArenas;
 
+    private final MyPoolThreadLocalCache threadLocalCache;
+
     public MyPooledByteBufAllocator() {
-        // 简单起见，Arena数量写死为1方便测试，后续支持与线程绑定后再拓展为与处理器数量挂钩
-        int arenasNum = 1;
+        this(false);
+    }
+
+    public MyPooledByteBufAllocator(boolean useCacheForAllThreads) {
+        // 简单起见，arena的数量与处理器核数挂钩(netty中有更复杂的方式去配置，既可以构造参数传参设置，也可以配置系统参数来控制默认值)
+        int arenasNum = Runtime.getRuntime().availableProcessors() * 2;
 
         // 初始化好heapArena数组
         heapArenas = new MyPoolArena.HeapArena[arenasNum];
@@ -17,13 +23,34 @@ public class MyPooledByteBufAllocator extends MyAbstractByteBufAllocator{
             MyPoolArena.HeapArena arena = new MyPoolArena.HeapArena(this);
             heapArenas[i] = arena;
         }
+
+        // 创建threadLocalCache，让线程绑定到唯一的PoolArena中，并且在small/normal分配时，启用相关的内存块缓存
+        this.threadLocalCache = new MyPoolThreadLocalCache(useCacheForAllThreads,this);
     }
 
     @Override
     protected MyByteBuf newHeapBuffer(int initialCapacity, int maxCapacity) {
-        // 简单起见，Arena数量写死为1方便测试，后续支持与线程绑定后再拓展为与处理器数量挂钩
-        MyPoolArena<byte[]> targetArena = heapArenas[0];
+        // 从ThreadLocal中获得当前线程所绑定的PoolArena(如果是线程第一次分配，则ThreadLocal初始值获取时会进行绑定)
+        MyPoolThreadCache cache = threadLocalCache.get();
+        MyPoolArena<byte[]> targetArena = cache.heapArena;
+        return targetArena.allocate(cache, initialCapacity, maxCapacity);
+    }
 
-        return targetArena.allocate(initialCapacity, maxCapacity);
+    public MyPoolArena<byte[]>[] getHeapArenas() {
+        return heapArenas;
+    }
+
+    public boolean trimCurrentThreadCache() {
+        MyPoolThreadCache cache = threadLocalCache.getIfExists();
+        if (cache != null) {
+            cache.trim();
+            return true;
+        }
+
+        return false;
+    }
+
+    public MyPoolThreadLocalCache getThreadLocalCache() {
+        return threadLocalCache;
     }
 }
