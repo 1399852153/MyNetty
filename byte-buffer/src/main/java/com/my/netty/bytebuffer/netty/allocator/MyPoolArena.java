@@ -192,7 +192,7 @@ public abstract class MyPoolArena<T> {
     }
 
     private void tcacheAllocateSmall(MyPoolThreadCache cache, MyPooledByteBuf<T> buf, final int reqCapacity, final MySizeClassesMetadataItem sizeClassesMetadataItem) {
-        // 优先从线程本地缓存进行分配，cpu高速缓存的局部性更好
+        // 优先从线程本地缓存进行分配，减少线程间竞争，不需要加锁, cpu高速缓存的局部性也更好
         if (cache.allocateSmall(this, buf, reqCapacity, sizeClassesMetadataItem)) {
             // 线程本地缓存中有直接可供分配的内存块，分配成功直接返回
             return;
@@ -232,7 +232,7 @@ public abstract class MyPoolArena<T> {
     }
 
     private void tcacheAllocateNormal(MyPoolThreadCache cache, MyPooledByteBuf<T> buf, final int reqCapacity, final MySizeClassesMetadataItem sizeClassesMetadataItem) {
-        // 优先从线程本地缓存进行分配，cpu高速缓存的局部性更好
+        // 优先从线程本地缓存进行分配，减少线程间竞争，不需要加锁, cpu高速缓存的局部性也更好
         if (cache.allocateNormal(this, buf, reqCapacity, sizeClassesMetadataItem)) {
             // was able to allocate out of the cache so move on
             return;
