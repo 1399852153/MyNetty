@@ -156,10 +156,22 @@ public class MyPoolThreadLocalCache extends MyFastThreadLocal<MyPoolThreadCache>
 #####
 * MyNetty由于只支持了堆内存的池化内存分配，因此只有heapArenas数组。同时也简化了设置Arenas个数的逻辑。
 * PoolThreadLocalCache是一个FastThreadLocal<PoolThreadCache>类型的数据结构。每一个线程都有一个自己所独有的PoolThreadCache，这个结构就是用于存放PooledByteBuf池化内存对象的线程本地缓存。
-* PoolThreadLocalCache的initialValue方法中可以看到，Netty并不会无脑的为所有线程都开启线程本地缓存，默认情况下useCacheForAllThreads为false，则只会为FastThreadLocalThread类型的线程设置线程本地缓存。  
+  initialValue方法中可以看到，Netty并不会无脑的为所有线程都开启线程本地缓存，默认情况下useCacheForAllThreads为false，则只会为FastThreadLocalThread类型的线程设置线程本地缓存。  
   对于普通线程，则返回了一个参数均为0的，本质上是无缓存作用的PoolThreadCache对象(PoolThreadCache内部的工作原理我们在下一小节展开)。
+* 在初始化PoolThreadCache时，通过leastUsedArena方法找到当前绑定线程最少的PoolArena与线程专属的PoolThreadCache缓存进行关联。  
+  通过这一方式，实现了上述jemalloc中提到的将线程与PoolArena进行绑定，并尽可能的使得PoolArena负载平衡。
 
 ### 2.2 PoolThreadCache实现解析
+* 在PoolThreadCache中，类似Small规格的分配，为每一种特定的规格都维护了一个对象池。  
+  对象池是MyMemoryRegionCache结构，small规格的对象池是smallSubPageHeapCaches数组，normal规格的对象池是normalHeapCaches数组。 
+* 默认情况下，所有的small规格都会进行缓存；而normal规格中只有32kb的这一最小规格才会被缓存，更大的规格将不会进行线程本地缓存。  
+  这样设计处于两个考虑，首先是每个线程都要维护线程本地缓存，缓存的池化内存对象会占用大量的内存空间，所要缓存的规格越多，则内存碎片越多，空间利用率越低。   
+  其次，绝大多数情况下越大规格的内存申请的频率越低，进行线程本地缓存所带来的吞吐量的提升越小。基于这两点，netty将最大的本地缓存规格设置为了32kb。  
+  当然，如果应用的开发者的实际场景中就是有大量的大规格池化内存的分配需求，netty也允许使用对应的参数来控制实际需要进行线程本地缓存的最大规格。
+* MyMemoryRegionCache中都维护了一个队列存放所缓存的PooledByteBuf池化对象(挂载在Entry节点上)；与lab6中的对象池设计一样，队列也是专门针对多写单读的并发场景优化的。  
+  因为从线程本地缓存中获取池化对象的只会是持有者线程，而归还时则可能在经过多次传递后，由其它线程进行归还而写回队列中。
+
+##### MyNetty PoolThreadCache实现源码
 ```java
 /**
  * 池化内存分配线程缓存，完全参考Netty的PoolThreadCache
@@ -416,7 +428,136 @@ public class MyPoolThreadCache {
     }
 }
 ```
+#####
+```java
+public abstract class MyMemoryRegionCache<T> {
 
+    private final int size;
+    private final Queue<Entry<T>> queue;
+    private final SizeClassEnum sizeClassEnum;
+    private int allocations;
+
+    @SuppressWarnings("rawtypes")
+    private static final MyObjectPool<Entry> RECYCLER = MyObjectPool.newPool(handle -> new Entry(handle));
+
+    MyMemoryRegionCache(int size, SizeClassEnum sizeClassEnum) {
+        this.size = MathUtil.safeFindNextPositivePowerOfTwo(size);
+        queue = new MpscUnpaddedArrayQueue<>(this.size);
+        this.sizeClassEnum = sizeClassEnum;
+    }
+
+    /**
+     * Add to cache if not already full.
+     * @return true 当前线程释放内存时，成功加入到本地线程缓存，不需要实际的回收
+     *         false 当前线程释放内存时，加入本地线程缓存失败，需要进行实际的回收
+     */
+    @SuppressWarnings("unchecked")
+    public final boolean add(MyPoolChunk<T> chunk, ByteBuffer nioBuffer, long handle, int normCapacity) {
+        Entry<T> entry = newEntry(chunk, nioBuffer, handle, normCapacity);
+        // 尝试加入到当前Cache的队列里
+        boolean queued = queue.offer(entry);
+        if (!queued) {
+            // If it was not possible to cache the chunk, immediately recycle the entry
+            entry.recycle();
+        }
+
+        return queued;
+    }
+    
+    public final boolean allocate(MyPooledByteBuf<T> buf, int reqCapacity, MyPoolThreadCache threadCache) {
+        Entry<T> entry = queue.poll();
+        if (entry == null) {
+            return false;
+        }
+
+        // 之前已经缓存过了，直接把对应的内存段拿出来复用，给本次同样规格的内存分配
+        initBuf(entry.chunk, entry.nioBuffer, entry.handle, buf, reqCapacity, threadCache);
+        entry.recycle();
+
+        // allocations is not thread-safe which is fine as this is only called from the same thread all time.
+        ++ allocations;
+        return true;
+    }
+    
+    public final int free(boolean finalizer) {
+        return free(Integer.MAX_VALUE, finalizer);
+    }
+
+    private int free(int max, boolean finalizer) {
+        int numFreed = 0;
+        for (; numFreed < max; numFreed++) {
+            // 遍历所有已缓存的entry，一个接着一个进行实际的内存释放
+            Entry<T> entry = queue.poll();
+            if (entry != null) {
+                freeEntry(entry, finalizer);
+            } else {
+                // all cleared
+                return numFreed;
+            }
+        }
+        return numFreed;
+    }
+    
+    public final void trim() {
+        int free = size - allocations;
+        allocations = 0;
+
+        // We not even allocated all the number that are
+        if (free > 0) {
+            free(free, false);
+        }
+    }
+
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private  void freeEntry(Entry entry, boolean finalizer) {
+        // Capture entry state before we recycle the entry object.
+        MyPoolChunk chunk = entry.chunk;
+        long handle = entry.handle;
+        int normCapacity = entry.normCapacity;
+
+        if (!finalizer) {
+            // recycle now so PoolChunk can be GC'ed. This will only be done if this is not freed because of
+            // a finalizer.
+            entry.recycle();
+        }
+
+        // 将当前entry中缓存的handle内存段进行实际的回收，放回到所属的PoolChunk中
+        chunk.arena.freeChunk(chunk, handle, normCapacity);
+    }
+    
+    protected abstract void initBuf(MyPoolChunk<T> chunk, ByteBuffer nioBuffer, long handle,
+                                    MyPooledByteBuf<T> buf, int reqCapacity, MyPoolThreadCache threadCache);
+
+    @SuppressWarnings("rawtypes")
+    private static Entry newEntry(MyPoolChunk<?> chunk, ByteBuffer nioBuffer, long handle, int normCapacity) {
+        Entry entry = RECYCLER.get();
+        entry.chunk = chunk;
+        entry.nioBuffer = nioBuffer;
+        entry.handle = handle;
+        entry.normCapacity = normCapacity;
+        return entry;
+    }
+
+    static final class Entry<T> {
+        final MyObjectPool.Handle<Entry<?>> recyclerHandle;
+        MyPoolChunk<T> chunk;
+        ByteBuffer nioBuffer;
+        long handle = -1;
+        int normCapacity;
+
+        Entry(MyObjectPool.Handle<Entry<?>> recyclerHandle) {
+            this.recyclerHandle = recyclerHandle;
+        }
+
+        void recycle() {
+            chunk = null;
+            nioBuffer = null;
+            handle = -1;
+            recyclerHandle.recycle(this);
+        }
+    }
+}
+```
 ### 2.3 引入线程本地缓存后的池化内存分配
 
 ### 2.4 引入线程本地缓存后的池化内存释放
