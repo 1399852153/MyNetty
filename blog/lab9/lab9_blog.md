@@ -168,7 +168,7 @@ public class MyPoolThreadLocalCache extends MyFastThreadLocal<MyPoolThreadCache>
   这样设计处于两个考虑，首先是每个线程都要维护线程本地缓存，缓存的池化内存对象会占用大量的内存空间，所要缓存的规格越多，则内存碎片越多，空间利用率越低。   
   其次，绝大多数情况下越大规格的内存申请的频率越低，进行线程本地缓存所带来的吞吐量的提升越小。基于这两点，netty将最大的本地缓存规格设置为了32kb。  
   当然，如果应用的开发者的实际场景中就是有大量的大规格池化内存的分配需求，netty也允许使用对应的参数来控制实际需要进行线程本地缓存的最大规格。
-* MyMemoryRegionCache中都维护了一个队列存放所缓存的PooledByteBuf池化对象(挂载在Entry节点上)；与lab6中的对象池设计一样，队列也是专门针对多写单读的并发场景优化的。  
+* MyMemoryRegionCache中都维护了一个队列存放所缓存的池化内存内存段对象(挂载在Entry节点上，handle连续内存段)；与lab6中的对象池设计一样，队列也是专门针对多写单读的并发场景优化的。  
   因为从线程本地缓存中获取池化对象的只会是持有者线程，而归还时则可能在经过多次传递后，由其它线程进行归还而写回队列中。
 
 ##### MyNetty PoolThreadCache实现源码
@@ -558,9 +558,30 @@ public abstract class MyMemoryRegionCache<T> {
     }
 }
 ```
-### 2.3 引入线程本地缓存后的池化内存分配
+### 2.3 引入线程本地缓存后的池化内存分配与释放
+在实现了线程本地缓存的功能后，我们再完整的梳理一下Netty中池化内存的分配与释放的流程。
 
-### 2.4 引入线程本地缓存后的池化内存释放
+##### 池化内存分配
+1. 入口为PooledByteBufAllocator，当前线程通过threadCache中获得唯一的线程本地缓存PoolThreadCache。  
+   初始化时，通过最少使用算法(leastUsedArena方法)找到目前负载最低的PoolArena与当前线程建立绑定关系。  
+   获取到当前线程所绑定的PoolArena后，通过其allocate方法进行池化内存分配。  
+2. PoolArena的allocate方法中，先从Recycle对象池中获取一个未绑定底层内存的裸PooledByteBuf对象(newByteBuf方法)，然后再尝试为其分配底层内存。  
+   通过计算所要申请的内存规格(SizeClasses类计算规范化后的规格)，判断其是Small、Normal还是Huge规格级别，分别走不同的分配逻辑。  
+   分配时，优先从线程本地缓存中获取可用的内存段。如果本地缓存中已缓存对应规格的handle内存段，则直接将其与当前PooledByteBuf进行绑定后返回，完成内存分配。
+3. 如果本地缓存无法满足当前分配，则需要从所绑定的PoolArena中获取可供使用的空闲内存段。  
+   Huge规格内存申请由于较为少见，且缓存空间代价过大，因此Netty中不进行池化，通过单独的额外分配内存空间以满足其需求。
+   Normal规格的池化内存分配基于伙伴算法，以PoolChunk为基础单位管理连续的内存段(PoolChunkList管理不同使用率的PoolChunk)，在通过分割和合并内存段的方式来追踪内存段的使用情况。  
+   Small规格的池化内存分配使用slab算法，通过一系列的PoolSubpage集合管理相同规格的内存段插槽，使用bitmap来追踪各个内存段插槽的分配情况(已分配/未分配)。
+4. 被分配出去的底层内存，以handle的形式进行表征。handle是一个64位的long类型结构，共划分为5个属性，分别是runOffset、size、isUsed、isSubpage、bitmapIdx of subpage。  
+   第一个属性是runOffset，即当前内存段的起始位置在第几个Page页。  
+   第二个属性是size，即handle所标识的连续内存段有多长，一共几个Page页大小(类似一家人买了个连号，都挨着坐一起)。  
+   第三个属性是isUsed，是否使用。一个handle被分配出去了，isUsed=1；未被分配出去则isUsed=0。  
+   第四个属性是isSubPage，是否是SubPage类型的内存段，0代表是Normal级别，1代表是Small级别。
+   第五个属性是bitmapIdx of subpage，仅用于small级别的分配(Normal分配所有位全为0)，标识当前内存段位于所属PoolSubPage的第几个插槽。
+5. 绑定完成后，对应的底层内存段被标识为已分配，其所对应的handle值与PooledByteBuf进行绑定，在后续释放内存时基于该handle对象定位到对应的连续内存段将其释放。  
+   PooledByteBuf在初始化时，计算好其在对应PoolChunk底层内存中的offset偏移量，在实际使用时通过该偏移量才能正确的读写到实际分配出去的对应内存地址。
+##### 池化内存释放
+
 
 ### 3. Netty池化内存实现整体分析
 
