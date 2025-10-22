@@ -1,5 +1,7 @@
 package com.my.netty.bytebuffer.netty;
 
+import com.my.netty.bytebuffer.netty.util.ByteProcessor;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.GatheringByteChannel;
@@ -109,6 +111,8 @@ public abstract class MyByteBuf implements MyReferenceCounted{
     }
 
     public abstract MyByteBuf discardSomeReadBytes();
+
+    public abstract int forEachByte(int index, int length, ByteProcessor processor);
 
     public abstract MyByteBuf skipBytes(int length);
 }

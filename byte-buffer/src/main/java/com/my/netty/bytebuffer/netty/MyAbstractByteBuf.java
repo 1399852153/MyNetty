@@ -2,6 +2,7 @@ package com.my.netty.bytebuffer.netty;
 
 import com.my.netty.bytebuffer.netty.allocator.MyByteBufAllocator;
 import com.my.netty.bytebuffer.netty.util.ByteBufUtil;
+import com.my.netty.bytebuffer.netty.util.ByteProcessor;
 import com.my.netty.bytebuffer.netty.util.MathUtil;
 import com.my.netty.bytebuffer.netty.util.SystemPropertyUtil;
 
@@ -362,6 +363,23 @@ public abstract class MyAbstractByteBuf extends MyByteBuf {
         }
 
         return this;
+    }
+
+    @Override
+    public int forEachByte(int index, int length, ByteProcessor processor) {
+        checkIndex(index, length);
+        // 从头扫到尾，直到processor找到符合要求的字节
+        return forEachByteAsc0(index, index + length, processor);
+    }
+
+    private int forEachByteAsc0(int start, int end, ByteProcessor processor) {
+        for (; start < end; ++start) {
+            if (!processor.process(_getByte(start))) {
+                return start;
+            }
+        }
+
+        return -1;
     }
 
     @Override

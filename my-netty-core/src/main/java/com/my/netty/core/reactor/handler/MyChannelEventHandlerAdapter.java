@@ -53,6 +53,15 @@ public class MyChannelEventHandlerAdapter implements MyChannelEventHandler{
 
     private static ConcurrentHashMap<Class<?>, Boolean> isSharableCacheMap = new ConcurrentHashMap<>();
 
+    /**
+     * Throws {@link IllegalStateException} if {@link MyChannelEventHandlerAdapter#isSharable()} returns {@code true}
+     */
+    protected void ensureNotSharable() {
+        if (isSharable()) {
+            throw new IllegalStateException("ChannelHandler " + getClass().getName() + " is not allowed to be shared");
+        }
+    }
+
     public boolean isSharable() {
         /**
          * MyNetty中直接用全局的ConcurrentHashMap来缓存handler类是否是sharable可共享的，实现起来很简单
