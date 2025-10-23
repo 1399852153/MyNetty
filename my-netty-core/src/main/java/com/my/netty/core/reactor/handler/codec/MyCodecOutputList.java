@@ -16,6 +16,7 @@
 package com.my.netty.core.reactor.handler.codec;
 
 import com.my.netty.bytebuffer.netty.util.MathUtil;
+import com.my.netty.bytebuffer.netty.util.ObjectUtil;
 import com.my.netty.threadlocal.impl.netty.MyFastThreadLocal;
 
 import java.util.AbstractList;
@@ -120,7 +121,7 @@ final class MyCodecOutputList extends AbstractList<Object> implements RandomAcce
 
     @Override
     public boolean add(Object element) {
-        checkNotNull(element, "element");
+        ObjectUtil.checkNotNull(element, "element");
         try {
             insert(size, element);
         } catch (IndexOutOfBoundsException ignore) {
@@ -134,7 +135,7 @@ final class MyCodecOutputList extends AbstractList<Object> implements RandomAcce
 
     @Override
     public Object set(int index, Object element) {
-        checkNotNull(element, "element");
+        ObjectUtil.checkNotNull(element, "element");
         checkIndex(index);
 
         Object old = array[index];
@@ -144,7 +145,7 @@ final class MyCodecOutputList extends AbstractList<Object> implements RandomAcce
 
     @Override
     public void add(int index, Object element) {
-        checkNotNull(element, "element");
+        ObjectUtil.checkNotNull(element, "element");
         checkIndex(index);
 
         if (size == array.length) {
@@ -231,16 +232,5 @@ final class MyCodecOutputList extends AbstractList<Object> implements RandomAcce
         System.arraycopy(array, 0, newArray, 0, array.length);
 
         array = newArray;
-    }
-
-    /**
-     * Checks that the given argument is not null. If it is, throws {@link NullPointerException}.
-     * Otherwise, returns the argument.
-     */
-    private static <T> T checkNotNull(T arg, String text) {
-        if (arg == null) {
-            throw new NullPointerException(text);
-        }
-        return arg;
     }
 }
