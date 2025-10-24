@@ -3,6 +3,7 @@ package com.my.netty.bytebuffer.netty;
 
 import com.my.netty.bytebuffer.netty.objectpool.MyObjectPool;
 import com.my.netty.bytebuffer.netty.util.BitsUtil;
+import com.my.netty.bytebuffer.netty.util.ByteBufUtil;
 
 import java.nio.ByteBuffer;
 
@@ -46,6 +47,11 @@ public class MyPooledHeapByteBuf extends MyPooledByteBuf<byte[]>{
         // 逻辑下标值为index，基于偏移量计算出最终的实际下标值
         int finallyIndex = idx(index);
         this.memory[finallyIndex] = (byte) value;
+    }
+
+    @Override
+    protected void _setInt(int index, int   value) {
+        ByteBufUtil.setInt(memory, idx(index), value);
     }
 
     @Override

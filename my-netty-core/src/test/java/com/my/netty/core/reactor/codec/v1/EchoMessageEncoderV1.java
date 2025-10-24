@@ -1,4 +1,4 @@
-package com.my.netty.core.reactor.codec;
+package com.my.netty.core.reactor.codec.v1;
 
 import com.my.netty.bytebuffer.netty.MyByteBuf;
 import com.my.netty.core.reactor.channel.MyNioChannel;
@@ -10,9 +10,12 @@ import org.slf4j.LoggerFactory;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
 
-public class EchoMessageEncoder extends MyChannelEventHandlerAdapter {
+/**
+ * v1版本没有处理黏包拆包问题的encoder
+ * */
+public class EchoMessageEncoderV1 extends MyChannelEventHandlerAdapter {
 
-    private static final Logger logger = LoggerFactory.getLogger(EchoMessageEncoder.class);
+    private static final Logger logger = LoggerFactory.getLogger(EchoMessageEncoderV1.class);
 
     @Override
     public void write(MyChannelHandlerContext ctx, Object msg, boolean doFlush, CompletableFuture<MyNioChannel> completableFuture) {

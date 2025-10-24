@@ -3,6 +3,7 @@ package com.my.netty.bytebuffer.netty;
 
 import com.my.netty.bytebuffer.netty.allocator.MyByteBufAllocator;
 import com.my.netty.bytebuffer.netty.util.BitsUtil;
+import com.my.netty.bytebuffer.netty.util.ByteBufUtil;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -141,6 +142,11 @@ public class MyUnPooledHeapByteBuf extends MyAbstractReferenceCountedByteBuf{
     @Override
     protected void _setByte(int index, int value) {
         this.array[index] = (byte) value;
+    }
+
+    @Override
+    protected void _setInt(int index, int value) {
+        ByteBufUtil.setInt(array, index, value);
     }
 
     @Override

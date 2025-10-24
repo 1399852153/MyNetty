@@ -1,23 +1,22 @@
-package com.my.netty.core.reactor.server;
+package com.my.netty.core.reactor.server.v1;
 
-import com.my.netty.bytebuffer.netty.allocator.MyPooledByteBufAllocator;
 import com.my.netty.core.reactor.channel.MyNioChannel;
-import com.my.netty.core.reactor.codec.EchoMessageDecoder;
-import com.my.netty.core.reactor.codec.EchoMessageEncoder;
+import com.my.netty.core.reactor.codec.v1.EchoMessageDecoderV1;
+import com.my.netty.core.reactor.codec.v1.EchoMessageEncoderV1;
 import com.my.netty.core.reactor.config.DefaultChannelConfig;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
+import com.my.netty.core.reactor.server.MyNioServerBootstrap;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.concurrent.locks.LockSupport;
 
-public class ServerDemo {
+public class BisMessageEchoServerDemo {
 
     public static void main(String[] args) throws IOException {
         DefaultChannelConfig defaultChannelConfig = new DefaultChannelConfig();
         defaultChannelConfig.setInitialReceiveBufferSize(16); // 设置小一点，方便测试
-        defaultChannelConfig.setAllocator(new MyPooledByteBufAllocator()); // 测试池化ByteBuf功能
 
         MyNioServerBootstrap myNioServerBootstrap = new MyNioServerBootstrap(
             new InetSocketAddress(8080),
@@ -27,9 +26,10 @@ public class ServerDemo {
                 public MyChannelPipeline buildMyChannelPipeline(MyNioChannel myNioChannel) {
                     MyChannelPipeline myChannelPipeline = new MyChannelPipeline(myNioChannel);
                     // 注册自定义的EchoServerEventHandler
-                    myChannelPipeline.addLast(new EchoMessageEncoder());
-                    myChannelPipeline.addLast(new EchoMessageDecoder());
-                    myChannelPipeline.addLast(new EchoServerEventHandler());
+                    myChannelPipeline.addLast(new EchoMessageEncoderV1());
+                    myChannelPipeline.addLast(new EchoMessageDecoderV1());
+                    // 换一个测试大数据写出的echo逻辑
+                    myChannelPipeline.addLast(new BigMessageEchoServerEventHandler());
                     return myChannelPipeline;
                 }
             },1,5, defaultChannelConfig);

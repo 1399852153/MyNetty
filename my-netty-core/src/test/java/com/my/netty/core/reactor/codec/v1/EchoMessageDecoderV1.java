@@ -1,4 +1,4 @@
-package com.my.netty.core.reactor.codec;
+package com.my.netty.core.reactor.codec.v1;
 
 import com.my.netty.bytebuffer.netty.MyByteBuf;
 import com.my.netty.core.reactor.handler.MyChannelEventHandlerAdapter;
@@ -9,9 +9,12 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 
-public class EchoMessageDecoder extends MyChannelEventHandlerAdapter {
+/**
+ * v1版本没有处理黏包拆包问题的decoder
+ * */
+public class EchoMessageDecoderV1 extends MyChannelEventHandlerAdapter {
 
-    private static final Logger logger = LoggerFactory.getLogger(EchoMessageDecoder.class);
+    private static final Logger logger = LoggerFactory.getLogger(EchoMessageDecoderV1.class);
 
     @Override
     public void channelRead(MyChannelHandlerContext ctx, Object msg) throws Exception {

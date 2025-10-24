@@ -1,4 +1,4 @@
-package com.my.netty.core.reactor.server;
+package com.my.netty.core.reactor.server.v1;
 
 import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.handler.MyChannelEventHandlerAdapter;
@@ -9,9 +9,20 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 
-public class EchoServerEventHandler extends MyChannelEventHandlerAdapter {
+public class BigMessageEchoServerEventHandler extends MyChannelEventHandlerAdapter {
 
-    private static final Logger logger = LoggerFactory.getLogger(EchoServerEventHandler.class);
+    private static final Logger logger = LoggerFactory.getLogger(BigMessageEchoServerEventHandler.class);
+
+    private static String message;
+
+    static{
+        StringBuilder stringBuilder = new StringBuilder();
+        for(int i=0; i<50000000; i++){
+            stringBuilder.append("i ");
+        }
+
+        message = stringBuilder.toString();
+    }
 
     @Override
     public void channelRead(MyChannelHandlerContext ctx, Object msg) {
@@ -23,17 +34,20 @@ public class EchoServerEventHandler extends MyChannelEventHandlerAdapter {
         // 读完了，echo服务器准备回写数据到客户端
         String echoMessage = "server echo:" + receivedStr;
 
-        CompletableFuture channelCompletedFuture = ctx.write(echoMessage,true);
+        CompletableFuture<MyNioChannel> channelCompletedFuture = ctx.write("1 ",false);
         channelCompletedFuture.whenComplete(new BiConsumer<MyNioChannel, Throwable>() {
             @Override
             public void accept(MyNioChannel myNioChannel, Throwable throwable) {
-                logger.info("write message success! channel={}",myNioChannel);
+                System.out.println("write 1 success!" + myNioChannel);
             }
         });
+        ctx.write("222 ",false);
+        ctx.write(message,false);
+        ctx.write(echoMessage,true);
     }
 
     @Override
-    public void channelReadComplete(MyChannelHandlerContext ctx) {
+    public void channelReadComplete(MyChannelHandlerContext ctx) throws Exception {
         logger.info("echo server channelReadComplete, channel={}",ctx.channel());
     }
 

@@ -1,4 +1,4 @@
-package com.my.netty.core.reactor.client;
+package com.my.netty.core.reactor.client.v1;
 
 import com.my.netty.core.reactor.handler.MyChannelEventHandlerAdapter;
 import com.my.netty.core.reactor.handler.context.MyChannelHandlerContext;

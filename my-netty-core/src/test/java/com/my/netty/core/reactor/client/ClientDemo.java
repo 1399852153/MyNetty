@@ -2,8 +2,12 @@ package com.my.netty.core.reactor.client;
 
 import com.my.netty.bytebuffer.netty.allocator.MyPooledByteBufAllocator;
 import com.my.netty.core.reactor.channel.MyNioChannel;
-import com.my.netty.core.reactor.codec.EchoMessageDecoder;
-import com.my.netty.core.reactor.codec.EchoMessageEncoder;
+import com.my.netty.core.reactor.client.v1.EchoClientEventHandler;
+import com.my.netty.core.reactor.client.v2.EchoClientEventHandlerV2;
+import com.my.netty.core.reactor.codec.v1.EchoMessageDecoderV1;
+import com.my.netty.core.reactor.codec.v1.EchoMessageEncoderV1;
+import com.my.netty.core.reactor.codec.v2.EchoMessageDecoderV2;
+import com.my.netty.core.reactor.codec.v2.EchoMessageEncoderV2;
 import com.my.netty.core.reactor.config.DefaultChannelConfig;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
 import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
@@ -24,9 +28,9 @@ public class ClientDemo {
             public MyChannelPipeline buildMyChannelPipeline(MyNioChannel myNioChannel) {
                 MyChannelPipeline myChannelPipeline = new MyChannelPipeline(myNioChannel);
                 // 注册自定义的EchoClientEventHandler
-                myChannelPipeline.addLast(new EchoMessageEncoder());
-                myChannelPipeline.addLast(new EchoMessageDecoder());
-                myChannelPipeline.addLast(new EchoClientEventHandler());
+                myChannelPipeline.addLast(new EchoMessageEncoderV2());
+                myChannelPipeline.addLast(new EchoMessageDecoderV2());
+                myChannelPipeline.addLast(new EchoClientEventHandlerV2());
                 return myChannelPipeline;
             }
         }, defaultChannelConfig);

@@ -244,9 +244,6 @@ public abstract class MyByteToMessageDecoder extends MyChannelEventHandlerAdapte
 
     protected abstract void decode(MyChannelHandlerContext ctx, MyByteBuf in, List<Object> out) throws Exception;
 
-    /**
-     * Get {@code numElements} out of the {@link List} and forward these through the pipeline.
-     */
     static void fireChannelRead(MyChannelHandlerContext ctx, List<Object> msgs, int numElements) {
         if (msgs instanceof MyCodecOutputList) {
             fireChannelRead(ctx, (MyCodecOutputList) msgs, numElements);
@@ -257,9 +254,6 @@ public abstract class MyByteToMessageDecoder extends MyChannelEventHandlerAdapte
         }
     }
 
-    /**
-     * Get {@code numElements} out of the {@link MyCodecOutputList} and forward these through the pipeline.
-     */
     static void fireChannelRead(MyChannelHandlerContext ctx, MyCodecOutputList msgs, int numElements) {
         for (int i = 0; i < numElements; i++) {
             ctx.fireChannelRead(msgs.getUnsafe(i));

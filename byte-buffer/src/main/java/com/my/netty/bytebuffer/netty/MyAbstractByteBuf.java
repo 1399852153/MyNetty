@@ -220,6 +220,8 @@ public abstract class MyAbstractByteBuf extends MyByteBuf {
 
     protected abstract void _setByte(int index, int value);
 
+    protected abstract void _setInt(int index, int value);
+
     public abstract MyByteBufAllocator alloc();
 
     @Override
@@ -256,6 +258,14 @@ public abstract class MyAbstractByteBuf extends MyByteBuf {
         ensureWritable0(length);
         setBytes(writerIndex, src, srcIndex, length);
         writerIndex += length;
+        return this;
+    }
+
+    @Override
+    public MyByteBuf writeInt(int value) {
+        ensureWritable0(4);
+        _setInt(writerIndex, value);
+        writerIndex += 4;
         return this;
     }
 
