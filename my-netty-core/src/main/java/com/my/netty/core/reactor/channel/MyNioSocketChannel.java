@@ -60,6 +60,8 @@ public class MyNioSocketChannel extends MyNioChannel{
                 socketChannel.close();
                 // 取消key的监听
                 key.cancel();
+
+                break;
             } else if(byteRead == 0){
                 // 当前读事件已经读取完毕了，退出循环
                 break;
