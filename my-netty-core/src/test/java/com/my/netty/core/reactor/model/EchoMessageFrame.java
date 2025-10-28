@@ -1,11 +1,19 @@
 package com.my.netty.core.reactor.model;
 
-public class EchoMessage {
+public class EchoMessageFrame {
 
     /**
      * 协议魔数，随便取的
      * */
-    public static final short MAGIC = (short)0x2233;
+    public static final int MAGIC = 0x2233;
+
+    public EchoMessageFrame() {
+    }
+
+    public EchoMessageFrame(String messageContent) {
+        this.messageContent = messageContent;
+        this.msgLength = messageContent.length();
+    }
 
     /**
      * 消息内容
@@ -21,21 +29,13 @@ public class EchoMessage {
         return messageContent;
     }
 
-    public void setMessageContent(String messageContent) {
-        this.messageContent = messageContent;
-    }
-
     public Integer getMsgLength() {
         return msgLength;
     }
 
-    public void setMsgLength(Integer msgLength) {
-        this.msgLength = msgLength;
-    }
-
     @Override
     public String toString() {
-        return "EchoMessage{" +
+        return "EchoMessageFrame{" +
             "messageContent='" + messageContent + '\'' +
             ", msgLength=" + msgLength +
             '}';

@@ -228,8 +228,15 @@ public class MyLengthFieldBasedFrameDecoder extends MyByteToMessageDecoder {
         // Netty使用buffer.retainedSlice(index, length);
         // 零拷贝，性能更好，节约内存，但MyNetty简单起见没有实现slice切片能力，所以只能重新创建一个ByteBuf,把数据复制过去
 
-        MyByteBuf frameByteBuf = ctx.alloc().heapBuffer(length - index);
-        buffer.getBytes(index, buffer, 0, length);
+        int frameLength = length - index;
+        MyByteBuf frameByteBuf = ctx.alloc().heapBuffer(frameLength);
+
+        System.out.println("extractFrame index=" + index + " length=" + length + " buffer.readIndex=" + buffer.readerIndex());
+
+        byte[] data = new byte[frameLength];
+        buffer.getBytes(index, data, 0, length);
+
+        frameByteBuf.writeBytes(data);
 
         return frameByteBuf;
     }

@@ -29,7 +29,7 @@ public class MyNioEventLoop implements Executor {
      * */
     private final Selector unwrappedSelector;
 
-    private final Queue<Runnable> taskQueue = new LinkedBlockingQueue<>(16);
+    private final Queue<Runnable> taskQueue = new LinkedBlockingQueue<>(256);
 
     private volatile Thread thread;
     private final MyNioEventLoopGroup childGroup;

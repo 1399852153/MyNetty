@@ -5,7 +5,6 @@ import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.client.v1.EchoClientEventHandler;
 import com.my.netty.core.reactor.client.v2.EchoClientEventHandlerV2;
 import com.my.netty.core.reactor.codec.v1.EchoMessageDecoderV1;
-import com.my.netty.core.reactor.codec.v1.EchoMessageEncoderV1;
 import com.my.netty.core.reactor.codec.v2.EchoMessageDecoderV2;
 import com.my.netty.core.reactor.codec.v2.EchoMessageEncoderV2;
 import com.my.netty.core.reactor.config.DefaultChannelConfig;
@@ -18,9 +17,9 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.Scanner;
 
-public class ClientDemo {
+public class ClientDemoLoopSend {
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException, InterruptedException {
         DefaultChannelConfig defaultChannelConfig = new DefaultChannelConfig();
         defaultChannelConfig.setInitialReceiveBufferSize(1024); // 设置小一点，方便测试
         defaultChannelConfig.setAllocator(new MyPooledByteBufAllocator()); // 测试池化ByteBuf功能
@@ -47,9 +46,13 @@ public class ClientDemo {
             String msg = sc.next();
             System.out.println("get input message:" + msg);
 
-            EchoMessageFrame request = new EchoMessageFrame(msg);
-            // 发送消息
-            myNioClientBootstrap.sendMessage(request);
+            for(int i=0; i<2; i++) {
+                EchoMessageFrame request = new EchoMessageFrame(msg);
+                // 批量发送消息，简单的压测下
+                myNioClientBootstrap.sendMessage(request);
+
+//                Thread.sleep(100L);
+            }
         }
     }
 }

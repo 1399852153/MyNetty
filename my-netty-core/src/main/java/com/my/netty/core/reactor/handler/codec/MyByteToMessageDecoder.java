@@ -136,7 +136,7 @@ public abstract class MyByteToMessageDecoder extends MyChannelEventHandlerAdapte
                 }
             }
         } else {
-            // 非byte类型直接跳过该handler
+            // 非ByteBuf类型直接跳过该handler
             ctx.fireChannelRead(msg);
         }
 

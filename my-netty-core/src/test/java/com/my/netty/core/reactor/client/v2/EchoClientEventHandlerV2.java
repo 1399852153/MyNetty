@@ -2,7 +2,7 @@ package com.my.netty.core.reactor.client.v2;
 
 import com.my.netty.core.reactor.handler.MyChannelEventHandlerAdapter;
 import com.my.netty.core.reactor.handler.context.MyChannelHandlerContext;
-import com.my.netty.core.reactor.model.EchoMessage;
+import com.my.netty.core.reactor.model.EchoMessageFrame;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,15 +17,15 @@ public class EchoClientEventHandlerV2 extends MyChannelEventHandlerAdapter {
         SocketChannel socketChannel = (SocketChannel) ctx.channel().getJavaChannel();
 
         // 经过decode后，msg一定是EchoMessage对象才对
-        if(!(msg instanceof EchoMessage)){
+        if(!(msg instanceof EchoMessageFrame)){
             logger.error("EchoClientEventHandlerV2 msg is not EchoMessage! msg.type={}", msg.getClass());
         }else{
-            EchoMessage echoMessage = (EchoMessage) msg;
+            EchoMessageFrame echoMessageFrame = (EchoMessageFrame) msg;
 
-            if(echoMessage.getMsgLength() == echoMessage.getMessageContent().length()){
-                logger.info("echo client received message:{} , from={}, valid success!",echoMessage,socketChannel.socket().getRemoteSocketAddress());
+            if(echoMessageFrame.getMsgLength() == echoMessageFrame.getMessageContent().length()){
+                logger.info("echo client received message:{} , from={}, valid success!", echoMessageFrame,socketChannel.socket().getRemoteSocketAddress());
             }else{
-                logger.info("echo client received message:{} , from={}, valid failed!",echoMessage,socketChannel.socket().getRemoteSocketAddress());
+                logger.info("echo client received message:{} , from={}, valid failed!", echoMessageFrame,socketChannel.socket().getRemoteSocketAddress());
             }
         }
     }

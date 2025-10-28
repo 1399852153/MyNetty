@@ -213,10 +213,10 @@ public class NIOEchoServer {
             System.out.println("received message:" + receivedStr + " ,from " + socketChannel.socket().getRemoteSocketAddress());
 
             // 读完了，echo服务器准备回写数据到客户端
-            String echoMessage = "server echo:" + receivedStr;
+            String echoMessageFrame = "server echo:" + receivedStr;
 
             ByteBuffer writeBuffer = ByteBuffer.allocateDirect(1024);
-            writeBuffer.put(echoMessage.getBytes(StandardCharsets.UTF_8));
+            writeBuffer.put(echoMessageFrame.getBytes(StandardCharsets.UTF_8));
             writeBuffer.flip(); // 写完了，flip供后续去读取
             socketChannel.write(writeBuffer);
         }

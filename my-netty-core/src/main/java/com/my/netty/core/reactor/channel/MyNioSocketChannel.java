@@ -74,6 +74,8 @@ public class MyNioSocketChannel extends MyNioChannel{
                 key.cancel();
 
                 readBuffer.release();
+
+                break;
             } else if(byteRead == 0){
                 readBuffer.release();
 
@@ -86,6 +88,8 @@ public class MyNioSocketChannel extends MyNioChannel{
                 // 触发pipeline的读取操作
                 this.getChannelPipeline().fireChannelRead(readBuffer);
             }
+
+            readBuffer = null;
         }while (receivedMessageBytesLimiter.canContinueReading());
 
         // 整理一下此次read事件读取的字节数，调整下一次read事件分配的bufferSize大小

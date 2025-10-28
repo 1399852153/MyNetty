@@ -76,7 +76,7 @@ public class MyNioClientBootstrap {
         });
     }
 
-    public void sendMessage(String msg) {
+    public void sendMessage(Object msg) {
         // 发送消息, 由encode编码器去编码为byteBuf
         myNioSocketChannel.getChannelPipeline().write(msg,true);
     }
