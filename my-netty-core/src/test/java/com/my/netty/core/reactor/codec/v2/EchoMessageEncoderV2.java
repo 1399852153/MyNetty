@@ -8,6 +8,7 @@ import com.my.netty.core.reactor.util.JsonUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 
 public class EchoMessageEncoderV2 extends MyMessageToByteEncoder<EchoMessageFrame> {
@@ -33,6 +34,6 @@ public class EchoMessageEncoderV2 extends MyMessageToByteEncoder<EchoMessageFram
         out.writeBytes(bytes);
 
         logger.info("EchoMessageEncoder message to byteBuffer, " +
-            "messageJson.length={}, myByteBuf={}",messageJson.length(),out);
+            "messageJson.length={}, myByteBuf={}",messageJson.length(),out.toString(Charset.defaultCharset()));
     }
 }

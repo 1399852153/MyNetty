@@ -40,8 +40,12 @@ public class EchoMessageDecoderV2 extends MyChannelEventHandlerAdapter {
         // 转换完成，将读取到ByteBuf给释放掉
         MyReferenceCountUtil.safeRelease(myByteBuf);
 
-        // 转化为EchoMessageFrame给业务处理器
-        EchoMessageFrame echoMessageFrame = JsonUtil.json2Obj(receivedStr, EchoMessageFrame.class);
-        ctx.fireChannelRead(echoMessageFrame);
+        try {
+            // 转化为EchoMessageFrame给业务处理器
+            EchoMessageFrame echoMessageFrame = JsonUtil.json2Obj(receivedStr, EchoMessageFrame.class);
+            ctx.fireChannelRead(echoMessageFrame);
+        }catch (Exception e){
+            logger.error(e.getMessage());
+        }
     }
 }

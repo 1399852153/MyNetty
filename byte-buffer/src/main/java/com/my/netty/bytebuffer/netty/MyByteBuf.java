@@ -74,6 +74,8 @@ public abstract class MyByteBuf implements MyReferenceCounted{
 
     public abstract MyByteBuf writeBytes(MyByteBuf src);
 
+    public abstract MyByteBuf writeBytes(MyByteBuf src, int srcIndex, int length);
+
     public abstract MyByteBuf setBytes(int index, byte[] src, int srcIndex, int length);
 
     public abstract MyByteBuf setBytes(int index, MyByteBuf src, int srcIndex, int length);

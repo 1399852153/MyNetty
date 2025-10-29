@@ -281,8 +281,10 @@ public abstract class MyAbstractByteBuf extends MyByteBuf {
         return this;
     }
 
-    private MyByteBuf writeBytes(MyByteBuf src, int srcIndex, int length) {
+    @Override
+    public MyByteBuf writeBytes(MyByteBuf src, int srcIndex, int length) {
         // 只支持heapByteBuf，所以直接写入array
+        ensureWritable0(length);
         setBytes(writerIndex, src, srcIndex, length);
         writerIndex += length;
         return this;

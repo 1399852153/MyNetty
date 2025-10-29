@@ -66,7 +66,7 @@ public abstract class MyByteToMessageDecoder extends MyChannelEventHandlerAdapte
                     // cumulation的空间足够，能够存放in中的数据，直接将in中的内容写入cumulation的尾部即可
 
                     // 因为目前只支持基于数组的heapByteBuf，所以直接in.array()
-                    cumulation.writeBytes(in.array(), in.readerIndex(), required);
+                    cumulation.writeBytes(in, in.readerIndex(), required);
 
                     // 将in设置为已读完(读指针等于写指针)
                     in.readerIndex(in.writerIndex());

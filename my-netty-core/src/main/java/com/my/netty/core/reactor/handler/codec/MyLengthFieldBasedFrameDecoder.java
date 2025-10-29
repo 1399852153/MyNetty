@@ -230,6 +230,8 @@ public class MyLengthFieldBasedFrameDecoder extends MyByteToMessageDecoder {
 
         MyByteBuf frameByteBuf = ctx.alloc().heapBuffer(length);
 
+//        System.out.println("extractFrame index=" + index + " length=" + length + " buffer.readIndex=" + buffer.readerIndex());
+
         byte[] data = new byte[length];
         buffer.getBytes(index, data, 0, length);
 
