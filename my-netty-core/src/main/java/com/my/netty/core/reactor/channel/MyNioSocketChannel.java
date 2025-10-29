@@ -15,6 +15,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
+import java.nio.charset.Charset;
 import java.util.List;
 
 public class MyNioSocketChannel extends MyNioChannel{
@@ -63,7 +64,7 @@ public class MyNioSocketChannel extends MyNioChannel{
             MyByteBufAllocator myByteBufAllocator = defaultChannelConfig.getAllocator();
             MyByteBuf readBuffer = myByteBufAllocator.heapBuffer(receiveBufferSize);
             int byteRead = readBuffer.writeBytes(socketChannel, receiveBufferSize);
-            logger.info("processReadEvent byteRead={}", byteRead);
+            logger.info("processReadEvent byteRead={},message={}", byteRead,readBuffer.toString(Charset.defaultCharset()));
 
             // 记录下最近一次读取的字节数
             receivedMessageBytesLimiter.recordLastBytesRead(byteRead);

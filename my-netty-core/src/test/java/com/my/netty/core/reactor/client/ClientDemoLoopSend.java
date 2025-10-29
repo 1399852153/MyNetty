@@ -46,12 +46,12 @@ public class ClientDemoLoopSend {
             String msg = sc.next();
             System.out.println("get input message:" + msg);
 
-            for(int i=0; i<2; i++) {
-                EchoMessageFrame request = new EchoMessageFrame(msg);
+            for(int i=0; i<3; i++) {
+                EchoMessageFrame request = new EchoMessageFrame(msg + "#" + i);
                 // 批量发送消息，简单的压测下
                 myNioClientBootstrap.sendMessage(request);
 
-//                Thread.sleep(100L);
+//                Thread.sleep(1000L);
             }
         }
     }
