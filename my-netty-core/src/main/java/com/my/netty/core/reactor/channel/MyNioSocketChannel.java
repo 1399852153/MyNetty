@@ -58,7 +58,6 @@ public class MyNioSocketChannel extends MyNioChannel{
         receivedMessageBytesLimiter.reset();
         do {
             int receiveBufferSize = receivedMessageBytesLimiter.getReceiveBufferSize();
-            // 暂时也不考虑黏包/拆包场景(Netty中靠ByteToMessageDecoder解决，后续再分析其原理)
 
             // 从jdk的ByteBuffer改造为使用ByteBuf
             MyByteBufAllocator myByteBufAllocator = defaultChannelConfig.getAllocator();

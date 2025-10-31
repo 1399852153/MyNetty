@@ -87,7 +87,6 @@ public class NIOEchoServer {
         SocketChannel socketChannel = (SocketChannel)key.channel();
 
         // 简单起见，buffer不缓存，每次读事件来都新创建一个
-        // 暂时也不考虑黏包/拆包场景(Netty中靠ByteToMessageDecoder解决，后续再分析其原理)，理想的认为每个消息都小于1024，且每次读事件都只有一个消息
         ByteBuffer readBuffer = ByteBuffer.allocate(1024);
 
         int byteRead = socketChannel.read(readBuffer);
