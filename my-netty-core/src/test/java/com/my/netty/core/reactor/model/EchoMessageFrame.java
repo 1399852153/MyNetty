@@ -16,7 +16,7 @@ public class EchoMessageFrame {
     }
 
     /**
-     * 消息内容
+     * 消息内容，实际消息体的json字符串
      * */
     private String messageContent;
 

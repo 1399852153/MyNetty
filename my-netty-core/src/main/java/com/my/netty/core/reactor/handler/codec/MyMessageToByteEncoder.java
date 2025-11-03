@@ -9,6 +9,9 @@ import com.my.netty.core.reactor.util.MyReferenceCountUtil;
 
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * 基本copy自Netty的MessageToByteEncoder类，但做了一些简化
+ * */
 public abstract class MyMessageToByteEncoder<I> extends MyChannelEventHandlerAdapter {
 
     private final TypeParameterMatcher matcher;

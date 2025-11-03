@@ -44,10 +44,127 @@ tcp出于传输效率的考虑无法很好的解决这个问题，所以黏包�
 
 #####
 上述这段关于黏包/拆包问题的内容基本copy自我2年前的关于手写简易rpc框架的博客：[自己动手实现rpc框架(一) 实现点对点的rpc通信](https://www.cnblogs.com/xiaoxiongcanguan/p/17506728.html)。  
-只是在当时，我仅仅是一个对Netty不甚了解的使用者，简单的使用Netty来实现rpc框架中基本的网络通信功能，并通过MessageToByteEncoder/ByteToMessageDecoder设计通信协议来处理黏包拆包问题。   
+只是当时我仅仅是一个对Netty不甚了解的使用者，简单的使用Netty来实现rpc框架中基本的网络通信功能，并通过MessageToByteEncoder/ByteToMessageDecoder来实现通信协议处理黏包拆包问题。   
 而现在却尝试着参考Netty的源码，通过自己亲手实现这些编解码器的核心逻辑，来进一步加深对Netty的理解，这种感觉还是挺奇妙的。
 
 ## 2. Netty解决黏包/拆包问题的通用编解码器
+* 在lab2中我们已经知道，Netty的设计者希望用户在pipeline中添加各式各样的入站和出站的Handler，组合起来共同完成复杂的业务逻辑。  
+  对发送的消息进行编码、将接收到的消息进行解码毫无疑问也是业务逻辑的一部分，所以Netty编解码器是以Handler的形式存在的。
+* Netty中解决黏包/拆包问题的编解码器是通用的，在实现基本功能的前提下也要给使用者一定的灵活性来定制自己的功能。因此Netty提供了一些基础的父类Handler完成通用的处理逻辑，并同时留下一些抽象的方法交给用户自定义的子类去自定义实现自己的业务逻辑。    
+##### 
+下面我们通过一个简单但又不失一般性的例子来展示Netty的通用编解码器的用法，并结合源码分析其解决黏包/拆包的具体原理。   
+我们首先设计一个基于业务数据长度编码的、非常简单的通信协议MySimpleProtocol，消息帧共分为3个部分，其中前4个字节是一个int类型的魔数0x2233用于解码时校验协议是否匹配，再往后的4个字节则是消息体的长度，最后就是消息体的内容，消息体的内容是EchoMessageFrame对象的json字符串。
+##### MySimpleProtocol协议示意图
+![img_1.png](img_1.png)
+##### 
+```java
+public class EchoMessageFrame {
+    /**
+     * 协议魔数，随便取的
+     * */
+    public static final int MAGIC = 0x2233;
+ 
+    /**
+     * 消息内容，实际消息体的json字符串
+     * */
+    private String messageContent;
+
+    /**
+     * 用于校验解码是否成功的属性
+     * */
+    private Integer msgLength;
+}
+```
+
+##### Netty通用编码器原理解析
+编码器Encoder简单理解就是将逻辑上的一个数据对象，从一种格式转换成另一种格式。而Netty作为一个网络通信框架，其中最典型的场景就是将内存中的一个消息对象，转换成二进制的ByteBuf对象发送到对端，所对应的便是MessageToByteEncoder。  
+MessageToByteEncoder是一个抽象类，其
+##### MyNetty的MyMessageToByteEncoder实现
+```java
+/**
+ * 基本copy自Netty的MessageToByteEncoder类，但做了一些简化
+ * */
+public abstract class MyMessageToByteEncoder<I> extends MyChannelEventHandlerAdapter {
+
+    private final TypeParameterMatcher matcher;
+
+    public MyMessageToByteEncoder(Class<? extends I> clazz) {
+        this.matcher = TypeParameterMatcher.get(clazz);
+    }
+
+    @Override
+    public void write(MyChannelHandlerContext ctx, Object msg, boolean doFlush, CompletableFuture<MyNioChannel> completableFuture) throws Exception {
+        MyByteBuf buf = null;
+        try {
+            // 判断当前msg的类型和当前Encoder是否匹配
+            if (acceptOutboundMessage(msg)) {
+                // 类型匹配，说明该msg需要由当前Encoder来编码，将msg转化成ByteBuf用于输出
+                @SuppressWarnings("unchecked")
+                I cast = (I) msg;
+                // 先分配一个ByteBuf出来
+                buf = ctx.alloc().heapBuffer();
+                try {
+                    // 由子类实现的自定义逻辑进行编码，将msg写入到buf中
+                    encode(ctx, cast, buf);
+                } finally {
+                    // 编码完成，尝试将当前被编码完成的消息释放掉
+                    MyReferenceCountUtil.release(cast);
+                }
+
+                // 将编码后的buf传到后续的outBoundHandler中(比起netty，少了一个空buf的优化逻辑)
+                ctx.write(buf, doFlush, completableFuture);
+
+                buf = null;
+            } else {
+                // 不匹配，跳过当前的outBoundHandler，直接交给后续的handler处理
+                ctx.write(msg, doFlush, completableFuture);
+            }
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        } finally {
+            if (buf != null) {
+                // buf不为null，说明编码逻辑有异常，提前release掉
+                buf.release();
+            }
+        }
+    }
+
+    protected abstract void encode(MyChannelHandlerContext ctx, I msg, MyByteBuf out) throws Exception;
+
+    private boolean acceptOutboundMessage(Object msg) {
+        return matcher.match(msg);
+    }
+}
+```
+```java
+public class EchoMessageEncoderV2 extends MyMessageToByteEncoder<EchoMessageFrame> {
+
+    private static final Logger logger = LoggerFactory.getLogger(EchoMessageEncoderV2.class);
+
+    public EchoMessageEncoderV2() {
+        super(EchoMessageFrame.class);
+    }
+
+    @Override
+    protected void encode(MyChannelHandlerContext ctx, EchoMessageFrame msg, MyByteBuf out) {
+        // 写事件从tail向head传播，msg一定是EchoMessage类型
+
+        String messageJson = JsonUtil.obj2Str(msg);
+        byte[] bytes = messageJson.getBytes(StandardCharsets.UTF_8);
+
+        // 写入魔数，确保协议是匹配的
+        out.writeInt(EchoMessageFrame.MAGIC);
+        // LengthFieldBased协议，先写入消息帧的长度
+        out.writeInt(bytes.length);
+        // 再写入消息体
+        out.writeBytes(bytes);
+
+        logger.info("EchoMessageEncoder message to byteBuffer, " +
+            "messageJson.length={}, myByteBuf={}",messageJson.length(),out.toString(Charset.defaultCharset()));
+    }
+}
+```
+
 
 ## 总结
 
