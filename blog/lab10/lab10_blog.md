@@ -75,10 +75,67 @@ public class EchoMessageFrame {
     private Integer msgLength;
 }
 ```
+##### 客户端/服务端
+```java
+public class ClientDemo {
+
+    public static void main(String[] args) throws IOException {
+        DefaultChannelConfig defaultChannelConfig = new DefaultChannelConfig();
+        defaultChannelConfig.setInitialReceiveBufferSize(1024); // 设置小一点，方便测试
+        defaultChannelConfig.setAllocator(new MyPooledByteBufAllocator()); // 测试池化ByteBuf功能
+
+        MyNioClientBootstrap myNioClientBootstrap = new MyNioClientBootstrap(new InetSocketAddress(8080),new MyChannelPipelineSupplier() {
+            @Override
+            public MyChannelPipeline buildMyChannelPipeline(MyNioChannel myNioChannel) {
+                MyChannelPipeline myChannelPipeline = new MyChannelPipeline(myNioChannel);
+                // 解码器，解决拆包、黏包问题
+                myChannelPipeline.addLast(new MyLengthFieldBasedFrameDecoder(1024 * 1024, 4, 4));
+                // 注册自定义的EchoClientEventHandler
+                myChannelPipeline.addLast(new EchoMessageEncoderV2());
+                myChannelPipeline.addLast(new EchoMessageDecoderV2());
+                myChannelPipeline.addLast(new EchoClientEventHandlerV2());
+                return myChannelPipeline;
+            }
+        }, defaultChannelConfig);
+
+        myNioClientBootstrap.start();
+    }
+}
+```
+```java
+public class ServerDemo {
+
+    public static void main(String[] args) throws IOException {
+        DefaultChannelConfig defaultChannelConfig = new DefaultChannelConfig();
+        defaultChannelConfig.setInitialReceiveBufferSize(16); // 设置小一点，方便测试
+        defaultChannelConfig.setAllocator(new MyPooledByteBufAllocator()); // 测试池化ByteBuf功能
+
+        MyNioServerBootstrap myNioServerBootstrap = new MyNioServerBootstrap(
+            new InetSocketAddress(8080),
+            // 先简单一点，只支持childEventGroup自定义配置pipeline
+            new MyChannelPipelineSupplier() {
+                @Override
+                public MyChannelPipeline buildMyChannelPipeline(MyNioChannel myNioChannel) {
+                    MyChannelPipeline myChannelPipeline = new MyChannelPipeline(myNioChannel);
+                    // 解码器，解决拆包、黏包问题
+                    myChannelPipeline.addLast(new MyLengthFieldBasedFrameDecoder(1024 * 1024, 4, 4));
+                    // 注册自定义的EchoServerEventHandler
+                    myChannelPipeline.addLast(new EchoMessageEncoderV2());
+                    myChannelPipeline.addLast(new EchoMessageDecoderV2());
+                    myChannelPipeline.addLast(new EchoServerEventHandlerV2());
+                    return myChannelPipeline;
+                }
+            },1,5, defaultChannelConfig);
+        myNioServerBootstrap.start();
+
+        LockSupport.park();
+    }
+}
+```
 
 ##### Netty通用编码器原理解析
-编码器Encoder简单理解就是将逻辑上的一个数据对象，从一种格式转换成另一种格式。而Netty作为一个网络通信框架，其中最典型的场景就是将内存中的一个消息对象，转换成二进制的ByteBuf对象发送到对端，所对应的便是MessageToByteEncoder。  
-MessageToByteEncoder是一个抽象类，其
+编码器Encoder简单理解就是将逻辑上的一个数据对象，从一种格式转换成另一种格式。Netty作为一个网络通信框架，其中最典型的场景就是将内存中的一个消息对象，转换成二进制的ByteBuf对象发送到对端，所对应的便是MessageToByteEncoder。  
+MessageToByteEncoder是一个抽象类，重写了ChannelEventHandlerAdapter的write方法。由于Netty其底层出站时只会处理ByteBuf类型对象(以及FileRegion类型)，MessageToByteEncoder作为一个出站处理器，用于拦截出站的消息，将匹配条件的对象按照一定的规则转换成ByteBuf对象。
 ##### MyNetty的MyMessageToByteEncoder实现
 ```java
 /**
@@ -164,6 +221,18 @@ public class EchoMessageEncoderV2 extends MyMessageToByteEncoder<EchoMessageFram
     }
 }
 ```
+#####
+* MessageToByteEncoder中有一个TypeParameterMatcher成员变量，其用于判断write方法所接受到的msg对象是否是所匹配的类型。  
+  对于复杂的业务，可以同时在流水线中设置针对不同类型消息对象的MessageToByteEncoder。  
+* MessageToByteEncoder中通过allocateBuffer方法基于要编码的消息对象，创建出所需的ByteBuf对象用于承接编码后的二进制数据(allocateBuffer方法可以由子类覆盖)。  
+  然后调用子类实现的自定义encode方法进行实际的解码操作。encode方法返回之后，如果ByteBuf对象不为空，则会通过write方法将编码后的ByteBuf对象传递给pipeline中的下一个出站处理器。
+* 而在我们自己定义的EchoMessageEncoderV2中可以看到，构造方法中设置为只处理EchoMessageFrame类型的对象。同时在重写的decode方法中将参数EchoMessageFrame消息对象按照我们自己约定的协议进行了编码。  
+  首先在消息头中写入固定的4字节协议魔数，然后再接着写入消息体的长度(messageJson.length)，最后将json字符串作为消息体整个写入bytebuf。 
+#####
+可以看到，在Netty提供了通用的编码器MessageToByteEncoder后，用户在绝大多数情况下仅需要聚焦于如何将一个消息对象按照既定的协议转换成二进制的ByteBuf对象，而不太需要关注ByteBuf对象的创建/释放，也不用考虑消息在pipeline中是如何传递的。
+总之，tcp层面的网络应用程序对消息按照特定协议进行编码是不可或缺的，而通用的编码器屏蔽掉了底层的细节，一定程度上简化了Netty使用者在实现编码逻辑时的复杂度。
+
+##### Netty通用编码器原理解析
 
 
 ## 总结
