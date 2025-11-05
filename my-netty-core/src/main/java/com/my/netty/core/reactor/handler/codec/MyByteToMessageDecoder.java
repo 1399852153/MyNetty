@@ -9,6 +9,9 @@ import java.util.List;
 
 import static java.lang.Integer.MAX_VALUE;
 
+/**
+ * 基本copy自Netty的ByteToMessageDecoder类，但做了一些简化
+ * */
 public abstract class MyByteToMessageDecoder extends MyChannelEventHandlerAdapter {
 
     /**
@@ -30,10 +33,8 @@ public abstract class MyByteToMessageDecoder extends MyChannelEventHandlerAdapte
     /**
      * 将新接受到的ByteBuf in合并到cumulation中
      * 除此之外，netty中还有另一种累积器COMPOSITE_CUMULATOR，基于更复杂的ByteBuf容器CompositeByteBuf，所以MyNetty中没有实现
-     * <p>
      * MERGE_CUMULATOR很好理解，就是把后面来的ByteBuf中的数据写入之前已有的ByteBuf中，这里需要进行内存数据的复制。
      * 而COMPOSITE_CUMULATOR中使用CompositeByteBuf可以做到几乎没有内存数据的复制。因为CompositeByteBuf通过一系列巧妙的映射计算，将实际上内存空间不连续的N个ByteBuf转换为了逻辑上连续的一个ByteBuf。
-     * <p>
      * 因此MERGE_CUMULATOR合并时性能较差，但实际解码读取数据时性能更好。而COMPOSITE_CUMULATOR在合并时性能较好，而实际解码时性能较差。Netty中默认使用MERGE_CUMULATOR作为累加器。
      */
     public static final Cumulator MERGE_CUMULATOR = new Cumulator() {

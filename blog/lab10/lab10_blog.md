@@ -133,10 +133,10 @@ public class ServerDemo {
 }
 ```
 
-##### Netty通用编码器原理解析
+### Netty通用编码器Encoder原理解析
 编码器Encoder简单理解就是将逻辑上的一个数据对象，从一种格式转换成另一种格式。Netty作为一个网络通信框架，其中最典型的场景就是将内存中的一个消息对象，转换成二进制的ByteBuf对象发送到对端，所对应的便是MessageToByteEncoder。  
 MessageToByteEncoder是一个抽象类，重写了ChannelEventHandlerAdapter的write方法。由于Netty其底层出站时只会处理ByteBuf类型对象(以及FileRegion类型)，MessageToByteEncoder作为一个出站处理器，用于拦截出站的消息，将匹配条件的对象按照一定的规则转换成ByteBuf对象。
-##### MyNetty的MyMessageToByteEncoder实现
+##### MyNetty MyMessageToByteEncoder实现
 ```java
 /**
  * 基本copy自Netty的MessageToByteEncoder类，但做了一些简化
@@ -226,14 +226,516 @@ public class EchoMessageEncoderV2 extends MyMessageToByteEncoder<EchoMessageFram
   对于复杂的业务，可以同时在流水线中设置针对不同类型消息对象的MessageToByteEncoder。  
 * MessageToByteEncoder中通过allocateBuffer方法基于要编码的消息对象，创建出所需的ByteBuf对象用于承接编码后的二进制数据(allocateBuffer方法可以由子类覆盖)。  
   然后调用子类实现的自定义encode方法进行实际的解码操作。encode方法返回之后，如果ByteBuf对象不为空，则会通过write方法将编码后的ByteBuf对象传递给pipeline中的下一个出站处理器。
-* 而在我们自己定义的EchoMessageEncoderV2中可以看到，构造方法中设置为只处理EchoMessageFrame类型的对象。同时在重写的decode方法中将参数EchoMessageFrame消息对象按照我们自己约定的协议进行了编码。  
+* 而在我们自己定义的EchoMessageEncoderV2中，构造方法中设置为只处理EchoMessageFrame类型的对象。同时在重写的decode方法中将参数EchoMessageFrame消息对象按照我们自己约定的协议进行了编码。  
   首先在消息头中写入固定的4字节协议魔数，然后再接着写入消息体的长度(messageJson.length)，最后将json字符串作为消息体整个写入bytebuf。 
 #####
-可以看到，在Netty提供了通用的编码器MessageToByteEncoder后，用户在绝大多数情况下仅需要聚焦于如何将一个消息对象按照既定的协议转换成二进制的ByteBuf对象，而不太需要关注ByteBuf对象的创建/释放，也不用考虑消息在pipeline中是如何传递的。
+在Netty提供了通用的编码器MessageToByteEncoder后，用户在绝大多数情况下仅需要聚焦于如何将一个消息对象按照既定的协议转换成二进制的ByteBuf对象，而不太需要关注ByteBuf对象的创建/释放，也不用考虑消息在pipeline中是如何传递的。
 总之，tcp层面的网络应用程序对消息按照特定协议进行编码是不可或缺的，而通用的编码器屏蔽掉了底层的细节，一定程度上简化了Netty使用者在实现编码逻辑时的复杂度。
 
-##### Netty通用编码器原理解析
+### Netty通用编码器Decoder原理解析
+相比于编码器，解决拆包/黏包问题的核心是更为复杂的解码器，因为发送消息时按照约定进行编码的二进制数据包，并不总是能恰好被对端完整的接收到。因此Netty提供了通用的解码器来解决这个问题。  
+解决黏包/拆包问题核心的解决思路是暂存累积所有读取到的数据包，并在每次读取到新数据时按照所约定的协议尝试对所累积的数据整体进行decode解码，每次decode解码时可能出现以下几种情况：
+#####
+* 当前所暂存累积的数据不足以完整的解析出一个完整的消息，说明出现了**拆包**现象。  
+  不需要做任何事情，只需等待新数据到来继续尝试decode。
+* 当前所暂存累积的数据**恰好**能解析出一个完整的消息，一个字节都不多。这是理想情况，一般只在流量很小时出现。
+* 当前所暂存积累的数据能解析出一个完整的消息，但解析完成后数据还有剩余。对剩余的数据继续进行decode还能解析出更多的消息，说明出现了**黏包**现象。  
+  对剩余数据持续不断的decode，尽可能的解码出更多的消息，直到剩余的数据不足以解析完整的数据包。
+#####
+完整的解码出消息后，需要及时的将对应的二进制数据释放掉，避免累积暂存的数据占用过多的内存。
+#####
+要解决黏包/拆包问题，解码器中最核心的两个功能就是对读取到的数据进行累积，以及实际的消息解码。  
+对数据进行暂存累积、并在解码后及时处理的功能是通用的，在Netty的抽象类MessageToByteEncoder中实现了这个功能。而对消息实际的解码方式则是多种多样的，取决于具体的协议，因此decode操作需要交由子类去具体实现。
 
+### Netty ByteToMessageDecoder原理
+MyNetty MyByteToMessageDecoder实现源码
+```java
+/**
+ * 基本copy自Netty的ByteToMessageDecoder类，但做了一些简化
+ * */
+public abstract class MyByteToMessageDecoder extends MyChannelEventHandlerAdapter {
+
+    /**
+     * Byte累积容器，用于积攒无法解码的半包Byte数据
+     */
+    private MyByteBuf cumulation;
+
+    /**
+     * 累积器
+     */
+    private Cumulator cumulator = MERGE_CUMULATOR;
+
+    private boolean first;
+
+    private int numReads;
+
+    private int discardAfterReads = 16;
+
+    /**
+     * 将新接受到的ByteBuf in合并到cumulation中
+     * 除此之外，netty中还有另一种累积器COMPOSITE_CUMULATOR，基于更复杂的ByteBuf容器CompositeByteBuf，所以MyNetty中没有实现
+     * MERGE_CUMULATOR很好理解，就是把后面来的ByteBuf中的数据写入之前已有的ByteBuf中，这里需要进行内存数据的复制。
+     * 而COMPOSITE_CUMULATOR中使用CompositeByteBuf可以做到几乎没有内存数据的复制。因为CompositeByteBuf通过一系列巧妙的映射计算，将实际上内存空间不连续的N个ByteBuf转换为了逻辑上连续的一个ByteBuf。
+     * 因此MERGE_CUMULATOR合并时性能较差，但实际解码读取数据时性能更好。而COMPOSITE_CUMULATOR在合并时性能较好，而实际解码时性能较差。Netty中默认使用MERGE_CUMULATOR作为累加器。
+     */
+    public static final Cumulator MERGE_CUMULATOR = new Cumulator() {
+        @Override
+        public MyByteBuf cumulate(MyByteBufAllocator alloc, MyByteBuf cumulation, MyByteBuf in) {
+            if (!cumulation.isReadable()
+                //&& in.isContiguous()
+            ) {
+                // 已有的cumulation已经被读取完毕了，清理掉，直接用新来的in代替之前的cumulation
+
+                // If cumulation is empty and input buffer is contiguous, use it directly
+                // 目前已实现的MyByteBuf都是contiguous=true的
+                cumulation.release();
+                return in;
+            }
+
+            try {
+                // 新来的ByteBuf一共有多少字节可供读取
+                final int required = in.readableBytes();
+
+                // 需要合并的字节数，超过了cumulation的当前的最大可写阈值，需要令cumulation扩容
+                if (required > cumulation.maxWritableBytes() ||
+                    required > cumulation.maxFastWritableBytes() && cumulation.refCnt() > 1) {
+                    return expandCumulation(alloc, cumulation, in);
+                } else {
+                    // cumulation的空间足够，能够存放in中的数据，直接将in中的内容写入cumulation的尾部即可
+
+                    // 因为目前只支持基于数组的heapByteBuf，所以直接in.array()
+                    cumulation.writeBytes(in, in.readerIndex(), required);
+
+                    // 将in设置为已读完(读指针等于写指针)
+                    in.readerIndex(in.writerIndex());
+                    return cumulation;
+                }
+            } finally {
+                // in中的内容被写入到cumulation后，in需要被release回收掉，避免内存泄露
+                in.release();
+            }
+        }
+    };
+
+    public MyByteToMessageDecoder() {
+        // 解码器必须是channel级别的，不能channel间共享, 因为内部暂存的流数据是channel级别的，共享的话就全乱套了，这里做个校验
+        ensureNotSharable();
+    }
+
+    @Override
+    public void channelRead(MyChannelHandlerContext ctx, Object msg) throws Exception {
+        // 顾名思义，ByteToMessageDecoder只处理Byte类型的数据
+        if (msg instanceof MyByteBuf) {
+            // 从Byte累积器中解码成功后的消息集合
+            MyCodecOutputList out = MyCodecOutputList.newInstance();
+
+            // 是否是第一次执行解码
+            this.first = (this.cumulation == null);
+
+            MyByteBufAllocator alloc = ctx.alloc();
+            MyByteBuf targetCumulation;
+            if (first) {
+                // netty里使用Unpooled.EMPTY_BUFFER，性能更好
+                targetCumulation = alloc.heapBuffer(0, 0);
+            } else {
+                targetCumulation = this.cumulation;
+            }
+
+            // 通过累积器，将之前已经收到的Byte消息与新收到的ByteBuf进行合并，得到一个合并后的新ByteBuf(合并的逻辑中涉及到诸如ByteBuf扩容、msg回收等操作)
+            this.cumulation = this.cumulator.cumulate(alloc, targetCumulation, (MyByteBuf) msg);
+
+            try {
+                // 读取cumulation中的数据进行解码
+                callDecode(ctx, cumulation, out);
+            } finally {
+                try {
+                    if (cumulation != null && !cumulation.isReadable()) {
+                        // 及时清理掉已经读取完成的累积器buf
+                        numReads = 0;
+                        cumulation.release();
+                        cumulation = null;
+                    } else if (++numReads >= discardAfterReads) {
+                        // We did enough reads already try to discard some bytes, so we not risk to see a OOME.
+                        // See https://github.com/netty/netty/issues/4275
+
+                        // 当前已读取的次数超过了阈值，尝试对cumulation进行缩容(已读的内容清除掉，)
+                        numReads = 0;
+                        discardSomeReadBytes();
+                    }
+
+                    int size = out.size();
+                    fireChannelRead(ctx, out, size);
+                } finally {
+                    // 后续的handler在处理完成消息后，将out列表回收掉
+                    out.recycle();
+                }
+            }
+        } else {
+            // 非ByteBuf类型直接跳过该handler
+            ctx.fireChannelRead(msg);
+        }
+
+    }
+
+    @Override
+    public void channelReadComplete(MyChannelHandlerContext ctx) {
+        numReads = 0;
+
+        // 完成了一次read操作，对cumulation进行缩容
+        discardSomeReadBytes();
+
+        // 省略了一些autoRead相关的逻辑
+
+        ctx.fireChannelReadComplete();
+    }
+
+    protected final void discardSomeReadBytes() {
+        if (cumulation != null && !first && cumulation.refCnt() == 1) {
+            cumulation.discardSomeReadBytes();
+        }
+    }
+
+    /**
+     * 对oldCumulation进行扩容，并且将in中的数据写入到扩容后的ByteBuf中
+     *
+     * @return 返回扩容后，并且合并完成后的ByteBuf
+     */
+    static MyByteBuf expandCumulation(MyByteBufAllocator alloc, MyByteBuf oldCumulation, MyByteBuf in) {
+        int oldBytes = oldCumulation.readableBytes();
+        int newBytes = in.readableBytes();
+
+        // 老的和新的可读字节总数
+        int totalBytes = oldBytes + newBytes;
+        // 基于totalBytes，分配出新的cumulation
+        MyByteBuf newCumulation = alloc.heapBuffer(alloc.calculateNewCapacity(totalBytes, MAX_VALUE));
+        MyByteBuf toRelease = newCumulation;
+        try {
+            // This avoids redundant checks and stack depth compared to calling writeBytes(...)
+
+            // 用setBytes代替writeBytes，性能好一点，但是需要自己设置正确的写指针(因为setBytes不会自动推进写指针)
+            newCumulation
+                // 先写入oldCumulation的内容
+                .setBytes(0, oldCumulation.array(), oldCumulation.readerIndex(), oldBytes)
+                // 再写入in中的内容
+                .setBytes(oldBytes, in.array(), in.readerIndex(), newBytes)
+                // 再推进写指针
+                .writerIndex(totalBytes);
+            in.readerIndex(in.writerIndex());
+            toRelease = oldCumulation;
+            return newCumulation;
+        } finally {
+            toRelease.release();
+        }
+    }
+
+    /**
+     * 将ByteBuf in中的数据按照既定的规则进行decode解码操作，解码成功后的消息加入out列表
+     * <p>
+     * MyNetty暂不支持handler被remove，省略了判断当前handler是否已经被remove的逻辑(ctx.isRemoved()、decodeRemovalReentryProtection等)
+     */
+    protected void callDecode(MyChannelHandlerContext ctx, MyByteBuf in, List<Object> out) {
+        try {
+            while (in.isReadable()) {
+                final int outSize = out.size();
+
+                if (outSize > 0) {
+                    // 当decode逻辑中成功解码了至少一个完整消息，触发fireChannelRead，将消息向后面的handler传递
+                    fireChannelRead(ctx, out, outSize);
+                    // 处理完成后，将out列表及时清理掉
+                    out.clear();
+                }
+
+                int oldInputLength = in.readableBytes();
+                // 调用子类实现的自定义解码逻辑
+                decode(ctx, in, out);
+
+                if (out.isEmpty()) {
+                    if (oldInputLength == in.readableBytes()) {
+                        break;
+                    } else {
+                        continue;
+                    }
+                }
+
+                if (oldInputLength == in.readableBytes()) {
+                    throw new RuntimeException(getClass() + ".decode() did not read anything but decoded a message.");
+                }
+            }
+        } catch (Exception cause) {
+            throw new RuntimeException(cause);
+        }
+    }
+
+    protected abstract void decode(MyChannelHandlerContext ctx, MyByteBuf in, List<Object> out) throws Exception;
+
+    static void fireChannelRead(MyChannelHandlerContext ctx, List<Object> msgs, int numElements) {
+        if (msgs instanceof MyCodecOutputList) {
+            fireChannelRead(ctx, (MyCodecOutputList) msgs, numElements);
+        } else {
+            for (int i = 0; i < numElements; i++) {
+                ctx.fireChannelRead(msgs.get(i));
+            }
+        }
+    }
+
+    static void fireChannelRead(MyChannelHandlerContext ctx, MyCodecOutputList msgs, int numElements) {
+        for (int i = 0; i < numElements; i++) {
+            ctx.fireChannelRead(msgs.getUnsafe(i));
+        }
+    }
+}
+```
+#####
+* ByteToMessageDecoder是一个入站处理器，其拦截所有的read读操作，将读取到的ByteBuf二进制数据按照协议设定尝试解码为独立的消息传递给流水线上更后面的入站处理器。
+* 每一个ByteToMessageDecoder中都持有一个ByteBuf对象(cumulation成员变量)来承载暂存的待解码数据，而每次从事件循环中读取新数据时也会有一个新的Bytebuf，而累积就需要将之前已经暂存的数据和新读取的数据进行合并，方便后续的decode。  
+* 对于数据合并，Netty中默认提供了两种累积策略。    
+  一个是比较好理解的，基于内存复制的累积策略，即MERGE_CUMULATOR。其将当前新读取数据的ByteBuf中的数据复制移动到cumulation容器中。  
+  而另一个是较为复杂的，基于内存映射的累积策略，即COMPOSITE_CUMULATOR。其将新读取数据的ByteBuf作为CompositeByteBuf组合容器的一部分进行合并，而不进行实际的内存复制操作。  
+* MERGE_CUMULATOR由于涉及到内存复制操作，所以在累积时性能较差，但由于合并后数据是连续存放的，因此在实际解码访问时，decode性能较好。  
+  而COMPOSITE_CUMULATOR则由于在累积时不进行数据复制操作，仅仅做了一个容器的索引映射，所以累积时性能较好。但在实际解码时，由于内存数据不连续，需要进行复杂的映射偏移计算，所以decode性能较差。  
+  个人理解是绝大多数场景下，消息体不大时，MERGE_CUMULATOR累积性能总体更好；只有在消息体特别大时，COMPOSITE_CUMULATOR才会有性能优势。所以Netty中默认使用的是MERGE_CUMULATOR。  
+* 在将新读取到的消息完毕后，会调用callDecode方法进行解码。默认的callDecode方法中，会调用子类自定义的decode方法进行解码，成功解码完成的消息对象会被放入out列表中，并通过fireChannelRead触发读事件传递给后续的入站处理器。
+
+### Netty LengthFieldBasedFrameDecoder原理
+在父类中的ByteToMessageDecoder完成了基础的暂存累积能力后，Netty还提供了很多常用的子类通用解码器。  
+在第一节中提到的三种协议设计方式，Netty中都提供了封装好的通用解码器，分别是FixedLengthFrameDecoder(基于固定长度的协议)、LineBasedFrameDecoder(以换行符作为特殊分隔符的协议)以及LengthFieldBasedFrameDecoder(基于业务数据长度编码的协议)。   
+限于篇幅，我们这里只分析相对复杂的LengthFieldBasedFrameDecoder原理，起到一个抛砖引玉的作用。
+##### 
+MyNetty MyLengthFieldBasedFrameDecoder实现源码
+```java
+/**
+ * 基本copy自Netty的LengthFieldBasedFrameDecoder，但做了一些简化
+ * */
+public class MyLengthFieldBasedFrameDecoder extends MyByteToMessageDecoder {
+
+    private final ByteOrder byteOrder;
+    private final int maxFrameLength;
+    private final int lengthFieldOffset;
+    private final int lengthFieldLength;
+    private final int lengthFieldEndOffset;
+    private final int lengthAdjustment;
+    private final int initialBytesToStrip;
+    private final boolean failFast;
+    private boolean discardingTooLongFrame;
+    private long tooLongFrameLength;
+    private long bytesToDiscard;
+    private int frameLengthInt = -1;
+
+    public MyLengthFieldBasedFrameDecoder(
+            int maxFrameLength,
+            int lengthFieldOffset, int lengthFieldLength) {
+        this(maxFrameLength, lengthFieldOffset, lengthFieldLength, 0, 0);
+    }
+
+    public MyLengthFieldBasedFrameDecoder(
+            int maxFrameLength,
+            int lengthFieldOffset, int lengthFieldLength,
+            int lengthAdjustment, int initialBytesToStrip) {
+        this(
+                maxFrameLength,
+                lengthFieldOffset, lengthFieldLength, lengthAdjustment,
+                initialBytesToStrip, true);
+    }
+
+    public MyLengthFieldBasedFrameDecoder(
+            int maxFrameLength, int lengthFieldOffset, int lengthFieldLength,
+            int lengthAdjustment, int initialBytesToStrip, boolean failFast) {
+        this(
+                ByteOrder.BIG_ENDIAN, maxFrameLength, lengthFieldOffset, lengthFieldLength,
+                lengthAdjustment, initialBytesToStrip, failFast);
+    }
+
+    public MyLengthFieldBasedFrameDecoder(
+            ByteOrder byteOrder, int maxFrameLength, int lengthFieldOffset, int lengthFieldLength,
+            int lengthAdjustment, int initialBytesToStrip, boolean failFast) {
+
+        this.byteOrder = ObjectUtil.checkNotNull(byteOrder, "byteOrder");
+
+        ObjectUtil.checkPositive(maxFrameLength, "maxFrameLength");
+
+        ObjectUtil.checkPositiveOrZero(lengthFieldOffset, "lengthFieldOffset");
+
+        ObjectUtil.checkPositiveOrZero(initialBytesToStrip, "initialBytesToStrip");
+
+        if (lengthFieldOffset > maxFrameLength - lengthFieldLength) {
+            throw new IllegalArgumentException(
+                    "maxFrameLength (" + maxFrameLength + ") " +
+                    "must be equal to or greater than " +
+                    "lengthFieldOffset (" + lengthFieldOffset + ") + " +
+                    "lengthFieldLength (" + lengthFieldLength + ").");
+        }
+
+        this.maxFrameLength = maxFrameLength;
+        this.lengthFieldOffset = lengthFieldOffset;
+        this.lengthFieldLength = lengthFieldLength;
+        this.lengthAdjustment = lengthAdjustment;
+        this.lengthFieldEndOffset = lengthFieldOffset + lengthFieldLength;
+        this.initialBytesToStrip = initialBytesToStrip;
+        this.failFast = failFast;
+    }
+
+    @Override
+    protected final void decode(MyChannelHandlerContext ctx, MyByteBuf in, List<Object> out) throws Exception {
+        Object decoded = decode(ctx, in);
+        if (decoded != null) {
+            out.add(decoded);
+        }
+    }
+
+    private void discardingTooLongFrame(MyByteBuf in) {
+        long bytesToDiscard = this.bytesToDiscard;
+        int localBytesToDiscard = (int) Math.min(bytesToDiscard, in.readableBytes());
+        in.skipBytes(localBytesToDiscard);
+        bytesToDiscard -= localBytesToDiscard;
+        this.bytesToDiscard = bytesToDiscard;
+
+        failIfNecessary(false);
+    }
+
+    private static void failOnNegativeLengthField(MyByteBuf in, long frameLength, int lengthFieldEndOffset) {
+        in.skipBytes(lengthFieldEndOffset);
+        throw new MyNettyException(
+           "negative pre-adjustment length field: " + frameLength);
+    }
+
+    private static void failOnFrameLengthLessThanLengthFieldEndOffset(MyByteBuf in,
+                                                                      long frameLength,
+                                                                      int lengthFieldEndOffset) {
+        in.skipBytes(lengthFieldEndOffset);
+        throw new MyNettyException("Adjusted frame length (" + frameLength + ") is less than lengthFieldEndOffset: " + lengthFieldEndOffset);
+    }
+
+    private void exceededFrameLength(MyByteBuf in, long frameLength) {
+        long discard = frameLength - in.readableBytes();
+        tooLongFrameLength = frameLength;
+
+        if (discard < 0) {
+            // buffer contains more bytes then the frameLength so we can discard all now
+            in.skipBytes((int) frameLength);
+        } else {
+            // Enter the discard mode and discard everything received so far.
+            discardingTooLongFrame = true;
+            bytesToDiscard = discard;
+            in.skipBytes(in.readableBytes());
+        }
+        failIfNecessary(true);
+    }
+
+    private static void failOnFrameLengthLessThanInitialBytesToStrip(MyByteBuf in,
+                                                                     long frameLength,
+                                                                     int initialBytesToStrip) {
+        in.skipBytes((int) frameLength);
+        throw new MyNettyException("Adjusted frame length (" + frameLength + ") is less " + "than initialBytesToStrip: " + initialBytesToStrip);
+    }
+
+    protected Object decode(MyChannelHandlerContext ctx, MyByteBuf in) {
+        long frameLength = 0;
+        if (frameLengthInt == -1) { // new frame
+
+            if (discardingTooLongFrame) {
+                discardingTooLongFrame(in);
+            }
+
+            if (in.readableBytes() < lengthFieldEndOffset) {
+                return null;
+            }
+
+            int actualLengthFieldOffset = in.readerIndex() + lengthFieldOffset;
+            frameLength = getUnadjustedFrameLength(in, actualLengthFieldOffset, lengthFieldLength, byteOrder);
+
+            if (frameLength < 0) {
+                failOnNegativeLengthField(in, frameLength, lengthFieldEndOffset);
+            }
+
+            frameLength += lengthAdjustment + lengthFieldEndOffset;
+
+            if (frameLength < lengthFieldEndOffset) {
+                failOnFrameLengthLessThanLengthFieldEndOffset(in, frameLength, lengthFieldEndOffset);
+            }
+
+            if (frameLength > maxFrameLength) {
+                exceededFrameLength(in, frameLength);
+                return null;
+            }
+            // never overflows because it's less than maxFrameLength
+            frameLengthInt = (int) frameLength;
+        }
+        if (in.readableBytes() < frameLengthInt) { // frameLengthInt exist , just check buf
+            return null;
+        }
+        if (initialBytesToStrip > frameLengthInt) {
+            failOnFrameLengthLessThanInitialBytesToStrip(in, frameLength, initialBytesToStrip);
+        }
+        in.skipBytes(initialBytesToStrip);
+
+        // extract frame
+        int readerIndex = in.readerIndex();
+        int actualFrameLength = frameLengthInt - initialBytesToStrip;
+        MyByteBuf frame = extractFrame(ctx, in, readerIndex, actualFrameLength);
+        in.readerIndex(readerIndex + actualFrameLength);
+        frameLengthInt = -1; // start processing the next frame
+        return frame;
+    }
+
+    protected long getUnadjustedFrameLength(MyByteBuf buf, int offset, int length, ByteOrder order) {
+        // 改为使用getUnsignedIntLE方法获取
+//        buf = buf.order(order);
+
+        switch (length) {
+            // MyNetty没有支持ByteBuf更多的数据类型，简化成只支持最常见的int类型，4字节的长度字段协议
+            case 4:
+                if(order == ByteOrder.BIG_ENDIAN) {
+                    return buf.getUnsignedInt(offset);
+                }else{
+                    return buf.getUnsignedIntLE(offset);
+                }
+            default:
+                throw new MyNettyException("unsupported lengthFieldLength: " + lengthFieldLength + " (expected: 4)");
+        }
+    }
+
+    private void failIfNecessary(boolean firstDetectionOfTooLongFrame) {
+        if (bytesToDiscard == 0) {
+            // Reset to the initial state and tell the handlers that
+            // the frame was too large.
+            long tooLongFrameLength = this.tooLongFrameLength;
+            this.tooLongFrameLength = 0;
+            discardingTooLongFrame = false;
+            if (!failFast || firstDetectionOfTooLongFrame) {
+                fail(tooLongFrameLength);
+            }
+        } else {
+            // Keep discarding and notify handlers if necessary.
+            if (failFast && firstDetectionOfTooLongFrame) {
+                fail(tooLongFrameLength);
+            }
+        }
+    }
+    
+    protected MyByteBuf extractFrame(MyChannelHandlerContext ctx, MyByteBuf buffer, int index, int length) {
+        // Netty使用buffer.retainedSlice(index, length);
+        // 零拷贝，性能更好，节约内存，但MyNetty简单起见没有实现slice切片能力，所以只能重新创建一个ByteBuf,把数据复制过去
+
+        MyByteBuf frameByteBuf = ctx.alloc().heapBuffer(length);
+        
+        byte[] data = new byte[length];
+        buffer.getBytes(index, data, 0, length);
+
+        frameByteBuf.writeBytes(data);
+
+        return frameByteBuf;
+    }
+
+    private void fail(long frameLength) {
+        if (frameLength > 0) {
+            throw new MyNettyException("Adjusted frame length exceeds " + maxFrameLength + ": " + frameLength + " - discarded");
+        } else {
+            throw new MyNettyException("Adjusted frame length exceeds " + maxFrameLength + " - discarding");
+        }
+    }
+}
+```
+#####
 
 ## 总结
 
