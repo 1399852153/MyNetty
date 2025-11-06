@@ -1,4 +1,4 @@
-~~# 从零开始实现简易版Netty(十) MyNetty 自定义编解码器解决TCP黏包/拆包问题
+# 从零开始实现简易版Netty(十) MyNetty 自定义编解码器解决TCP黏包/拆包问题
 ## 1. TCP黏包拆包问题介绍
 在上一篇博客中，截止lab9版本MyNetty已经实现了包括池化内存容器在内的绝大多数功能。按照计划，lab10也是本系列博客的最后一个迭代中将实现通用的编解码处理器来解决接受数据时的tcp黏包/拆包问题。  
 由于本文属于系列博客，读者需要对之前的博客内容有所了解才能更好地理解本文内容。
@@ -498,7 +498,7 @@ public abstract class MyByteToMessageDecoder extends MyChannelEventHandlerAdapte
 
 ### Netty LengthFieldBasedFrameDecoder原理
 在父类中的ByteToMessageDecoder完成了基础的暂存累积能力后，Netty还提供了很多常用的子类通用解码器。  
-在第一节中提到的三种协议设计方式，Netty中都提供了封装好的通用解码器，分别是FixedLengthFrameDecoder(基于固定长度的协议)、LineBasedFrameDecoder(以换行符作为特殊分隔符的协议)以及LengthFieldBasedFrameDecoder(基于业务数据长度编码的协议)。   
+在第一节中提到的三种协议设计方式，Netty中都提供了封装好的通用解码器，分别是FixedLengthFrameDecoder(基于固定长度的协议)、DelimiterBasedFrameDecoder(以特定符号作为分隔符的协议)、LineBasedFrameDecoder(以换行符作为分隔符的协议)以及LengthFieldBasedFrameDecoder(基于业务数据长度编码的协议)。   
 限于篇幅，我们这里只分析相对复杂的LengthFieldBasedFrameDecoder原理，起到一个抛砖引玉的作用。
 ##### 
 MyNetty MyLengthFieldBasedFrameDecoder实现源码
@@ -736,7 +736,27 @@ public class MyLengthFieldBasedFrameDecoder extends MyByteToMessageDecoder {
 }
 ```
 #####
+* LengthFieldBasedFrameDecoder将消息体按照协议分为3个部分，一个是固定长度的消息头，一个是消息体的长度字段(LengthField)，最后则是长度不定的完整消息体。  
+  通过lengthFieldOffset来设置所要decode解码的协议消息头的长度，通过lengthFieldLength来设置消息体长度字段的长度。  
+  在我们的MySimpleProtocol协议中，消息头仅仅是一个固定4字节的魔数，所以lengthFieldOffset=4；而用于存放消息体长度的字段属性是一个int类型，所以lengthFieldLength也等于4.
+* 按照配置的lengthFieldOffset、lengthFieldLength等参数，在尝试解码时能精确的获取到消息体的长度，并根据该长度尝试获取完整的消息体。  
+  如果成功的解析出消息体长度属性，同时剩余的累积数据又大于或等于该长度，则将对应的二进制数据作为完整的消息体一并解码，得到一个完整的消息帧。
+* 为了避免因为bug或者恶意攻击等消息体过大而导致内存溢出的问题，LengthFieldBasedFrameDecoder中还允许通过设置maxFrameLength来控制能支持的最大消息体。  
+  在解码时如果发现一个消息体的长度就超过了阈值，则会抛出异常或者丢弃之前累积到的消息。
+* 解析到完整的消息体后，将其存入独立的ByteBuf容器向后传播，给其它的入站处理器。ByteBuf容器中的数据通过initialBytesToStrip参数，可以控制其是否包括消息头、长度字段等，或仅包含消息体。
+* Netty在LengthFieldBasedFrameDecoder类的头部注释包括了针对不同的协议设计应该如何设置构造方法的参数，以及解码器的相应行为，限于篇幅，这里就不再展开了。
+#####
+Netty提供的LengthFieldBasedFrameDecoder等几个基础的子类解码器可以满足大多数常规的协议编解码需求，但是并不适用于一些更复杂的协议、复杂的协议一般只使用ByteToMessageDecoder中的累积功能，由自己实现完整的解码逻辑。  
+同时Netty作为一个完善的网络框架，也针对常见的网络协议，如http协议、WebSocket协议、redis协议等提供了对应的编解码器库，用户可以很简单的搭建基于对应协议的应用程序。
 
 ## 总结
+* 本篇博客中我们先简单介绍了tcp黏包/拆包问题产生的原因以及大致的解决思路，然后结合一个简单的传输协议MySimpleProtocol分析了Netty提供的基础的通用编解码器，其中包括MessageToByteEncoder、ByteToMessageDecoder和LengthFieldBasedFrameDecoder。  
+  整个处理流程中最核心的逻辑一个针对消息帧的编码、解码逻辑，另一个则是接受消息数据时的暂存累积。
+* lab10是整个MyNetty中的最后一个迭代，我们已经如第一篇博客中所计划的那样，一步一个脚印的逐步实现了一个麻雀虽小五脏俱全的简易版Netty。
+* 本篇博客是MyNetty系列的最后一篇博客。虽然比起Netty，MyNetty无论是功能上还是性能上都差的太多，但却涵盖了Netty中绝大多数核心的功能。  
+  希望这个简易版的MyNetty能够降低对Netty感兴趣的读者在理解Netty工作原理时的难度，让读者能够更好的理解Netty、使用Netty。
+#####
+博客中展示的完整代码在我的github上：https://github.com/1399852153/MyNetty (release/lab10_codec_handler分支)。  
+希望MyNetty系列博客能够帮助到对Netty感兴趣的读者，内容如有错误，还请多多指教。
 
 
