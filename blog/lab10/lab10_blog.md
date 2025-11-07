@@ -750,8 +750,7 @@ Netty提供的LengthFieldBasedFrameDecoder等几个基础的子类解码器可�
 同时Netty作为一个完善的网络框架，也针对常见的网络协议，如http协议、WebSocket协议、redis协议等提供了对应的编解码器库，用户可以很简单的搭建基于对应协议的应用程序。
 
 ## 总结
-* 本篇博客中我们先简单介绍了tcp黏包/拆包问题产生的原因以及大致的解决思路，然后结合一个简单的传输协议MySimpleProtocol分析了Netty提供的基础的通用编解码器，其中包括MessageToByteEncoder、ByteToMessageDecoder和LengthFieldBasedFrameDecoder。  
-  整个处理流程中最核心的两个逻辑其一是针对消息帧的编码、解码逻辑，另一个则是接受消息数据时的暂存累积。
+* 本篇博客中我们先简单介绍了tcp黏包/拆包问题产生的原因以及大致的解决思路，然后结合一个简单的传输协议MySimpleProtocol分析了Netty提供的基础的通用编解码器，其中包括MessageToByteEncoder、ByteToMessageDecoder和LengthFieldBasedFrameDecoder。整个处理流程中最核心的两个逻辑其一是针对消息帧的编码、解码逻辑，另一个则是接受消息数据时的暂存累积。
 * lab10是整个MyNetty中的最后一个迭代，我们已经如第一篇博客中所计划的那样，一步一个脚印的逐步实现了一个麻雀虽小五脏俱全的简易版Netty。  
 * 虽然比起Netty，MyNetty无论是功能上还是性能上都差的太多，但却涵盖了Netty中大多数的核心功能。  
   希望这个简易版的MyNetty能够降低读者理解Netty工作原理时的难度，能够更好的理解Netty、使用Netty。

@@ -14,9 +14,9 @@
 7. Normal级别的池化内存分配(伙伴算法)
 8. Small级别的池化内存分配(slab算法)
 9. 池化内存分配支持线程本地缓存(ThreadLocalCache)
-10. 常用的编解码器(FixedLengthFrameDecoder/LineBasedFrameDecoder等)
+10. 常用的编解码器(比如LengthFieldBasedFrameDecoder)
 #####
-每一部分都会有单独的分支和对应的博客（持续更新中）
+每一部分都会有单独的分支和对应的博客
 #####
 1. lab1版本分支:  release/lab1_nio_reactor   
    博客地址: [从零开始实现简易版Netty(一) MyNetty Reactor模式](https://www.cnblogs.com/xiaoxiongcanguan/p/18939320)
@@ -36,3 +36,5 @@
    博客地址: [从零开始实现简易版Netty(八) MyNetty 实现Small规格的池化内存分配](https://www.cnblogs.com/xiaoxiongcanguan/p/19109991)  
 9. lab9版本分支:  release/lab9_thread_local_cache  
    博客地址: [从零开始实现简易版Netty(九) MyNetty 实现池化内存的线程本地缓存](https://www.cnblogs.com/xiaoxiongcanguan/p/19148861)  
+10. lab10版本分支: release/lab10_codec_handler  
+   博客地址: [从零开始实现简易版Netty(十) MyNetty 通用编解码器解决TCP黏包/拆包问题](https://www.cnblogs.com/xiaoxiongcanguan/p/19200844) 
