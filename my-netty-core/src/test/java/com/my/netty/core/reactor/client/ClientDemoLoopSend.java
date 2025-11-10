@@ -2,15 +2,13 @@ package com.my.netty.core.reactor.client;
 
 import com.my.netty.bytebuffer.netty.allocator.MyPooledByteBufAllocator;
 import com.my.netty.core.reactor.channel.MyNioChannel;
-import com.my.netty.core.reactor.client.v1.EchoClientEventHandler;
 import com.my.netty.core.reactor.client.v2.EchoClientEventHandlerV2;
-import com.my.netty.core.reactor.codec.v1.EchoMessageDecoderV1;
 import com.my.netty.core.reactor.codec.v2.EchoMessageDecoderV2;
 import com.my.netty.core.reactor.codec.v2.EchoMessageEncoderV2;
 import com.my.netty.core.reactor.config.DefaultChannelConfig;
 import com.my.netty.core.reactor.handler.codec.MyLengthFieldBasedFrameDecoder;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipeline;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipelineSupplier;
 import com.my.netty.core.reactor.model.EchoMessageFrame;
 
 import java.io.IOException;

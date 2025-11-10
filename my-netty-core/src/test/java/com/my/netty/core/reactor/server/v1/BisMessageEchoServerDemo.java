@@ -4,8 +4,8 @@ import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.codec.v1.EchoMessageDecoderV1;
 import com.my.netty.core.reactor.codec.v1.EchoMessageEncoderV1;
 import com.my.netty.core.reactor.config.DefaultChannelConfig;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipeline;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipelineSupplier;
 import com.my.netty.core.reactor.server.MyNioServerBootstrap;
 
 import java.io.IOException;

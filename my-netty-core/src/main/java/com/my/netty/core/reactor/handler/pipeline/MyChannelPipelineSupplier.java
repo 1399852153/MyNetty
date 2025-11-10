@@ -1,4 +1,4 @@
-package com.my.netty.core.reactor.handler.pinpline;
+package com.my.netty.core.reactor.handler.pipeline;
 
 
 import com.my.netty.core.reactor.channel.MyNioChannel;

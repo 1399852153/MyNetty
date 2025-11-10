@@ -51,7 +51,9 @@ public class EchoServerEventHandlerV2 extends MyChannelEventHandlerAdapter {
     }
 
     @Override
-    public void close(MyChannelHandlerContext ctx) throws Exception {
+    public void close(MyChannelHandlerContext ctx) {
+        logger.info("echo server close, channel={}",ctx.channel());
+
         ctx.close();
     }
 }

@@ -5,7 +5,7 @@ import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoop;
 import com.my.netty.core.reactor.handler.MyChannelEventHandler;
 import com.my.netty.core.reactor.handler.mask.MyChannelHandlerMaskManager;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipeline;
 import com.my.netty.core.reactor.util.ThrowableUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -3,7 +3,7 @@ package com.my.netty.core.reactor.handler.context;
 
 import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.handler.MyChannelEventHandler;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipeline;
 
 import java.util.concurrent.CompletableFuture;
 

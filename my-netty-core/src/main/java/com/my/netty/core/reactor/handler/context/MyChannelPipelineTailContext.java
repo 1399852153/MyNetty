@@ -2,7 +2,7 @@ package com.my.netty.core.reactor.handler.context;
 
 import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.handler.MyChannelEventHandler;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipeline;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

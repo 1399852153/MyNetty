@@ -6,7 +6,7 @@ import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoop;
 import com.my.netty.core.reactor.handler.MyChannelEventHandler;
 import com.my.netty.core.reactor.handler.MyChannelEventInvoker;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipeline;
 
 /**
  * channelHandler上下文

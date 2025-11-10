@@ -2,7 +2,7 @@ package com.my.netty.core.reactor.eventloop;
 
 
 import com.my.netty.core.reactor.config.DefaultChannelConfig;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipelineSupplier;
 
 import java.util.concurrent.atomic.AtomicInteger;
 

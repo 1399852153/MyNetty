@@ -1,7 +1,7 @@
 package com.my.netty.core.reactor.pipeline;
 
 import com.my.netty.core.reactor.exception.MyNettyException;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipeline;
 import org.junit.Assert;
 import org.junit.Test;
 

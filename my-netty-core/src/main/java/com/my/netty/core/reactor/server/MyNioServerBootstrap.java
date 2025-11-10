@@ -3,7 +3,7 @@ package com.my.netty.core.reactor.server;
 import com.my.netty.core.reactor.config.DefaultChannelConfig;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoop;
 import com.my.netty.core.reactor.eventloop.MyNioEventLoopGroup;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipelineSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

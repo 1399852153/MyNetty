@@ -5,7 +5,7 @@ import com.my.netty.bytebuffer.netty.MyByteBuf;
 import com.my.netty.bytebuffer.netty.allocator.MyByteBufAllocator;
 import com.my.netty.core.reactor.channel.buffer.MyChannelOutboundBuffer;
 import com.my.netty.core.reactor.config.DefaultChannelConfig;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipelineSupplier;
 import com.my.netty.core.reactor.limiter.ReceivedMessageBytesLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,6 +75,8 @@ public class MyNioSocketChannel extends MyNioChannel{
 
                 readBuffer.release();
 
+                // 触发close事件
+                this.getChannelPipeline().close();
                 break;
             } else if(byteRead == 0){
                 readBuffer.release();

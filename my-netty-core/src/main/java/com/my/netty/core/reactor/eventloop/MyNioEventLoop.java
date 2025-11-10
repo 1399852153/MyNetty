@@ -4,7 +4,7 @@ import com.my.netty.core.reactor.channel.MyNioChannel;
 import com.my.netty.core.reactor.channel.MyNioSocketChannel;
 import com.my.netty.core.reactor.config.DefaultChannelConfig;
 import com.my.netty.core.reactor.exception.MyNettyException;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipelineSupplier;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipelineSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -170,6 +170,13 @@ public class MyNioEventLoop implements Executor {
                 if(key.channel() != null){
                     logger.error("has error, close channel={} ",key.channel());
                     key.channel().close();
+                }
+
+                Object attachment = key.attachment();
+                if(attachment != null){
+                    // 目前所有的attachment都是MyNioChannel
+                    MyNioSocketChannel myNioSocketChannel = (MyNioSocketChannel)attachment;
+                    myNioSocketChannel.getChannelPipeline().close();
                 }
             }
         }

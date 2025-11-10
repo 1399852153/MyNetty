@@ -2,7 +2,7 @@ package com.my.netty.core.reactor.handler.context;
 
 
 import com.my.netty.core.reactor.handler.MyChannelEventHandler;
-import com.my.netty.core.reactor.handler.pinpline.MyChannelPipeline;
+import com.my.netty.core.reactor.handler.pipeline.MyChannelPipeline;
 
 public class MyDefaultChannelHandlerContext extends MyAbstractChannelHandlerContext{
 
